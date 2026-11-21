@@ -843,6 +843,56 @@ function stopLive() {
   if (livePlayer) { livePlayer.destroy(); livePlayer = null; }
 }
 
+// Recorded diagnostic: runs the preview for 15 s, logs everything on both sides, offers a file.
+let diag = null;
+
+function diagLine(text) {
+  if (!diag) return;
+  diag.lines.push(`${((performance.now() - diag.t0) / 1000).toFixed(2).padStart(6)}s ${text}`);
+  const out = $('#diagOut');
+  out.textContent = diag.lines.join('\n');
+  out.scrollTop = out.scrollHeight;
+}
+
+function finishDiagnostic() {
+  if (!diag) return;
+  diagLine('--- end of recording ---');
+  const finished = diag;
+  diag = null;
+  clearTimeout(finished.timeout);
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const link = $('#diagDownload');
+  URL.revokeObjectURL(link.href || '');
+  link.href = URL.createObjectURL(new Blob([finished.lines.join('\n') + '\n'], { type: 'text/plain' }));
+  link.download = `gremote-preview-diagnostic-${stamp}.txt`;
+  link.hidden = false;
+  $('#diagStart').disabled = false;
+}
+
+function startDiagnostic() {
+  const d = singleDevice();
+  if (!d) return;
+  if (screenRunning) stopScreen();
+  diag = { lines: [], t0: performance.now(), timeout: null };
+  $('#diagOut').hidden = false;
+  $('#diagDownload').hidden = true;
+  $('#diagStart').disabled = true;
+  const quality = $('#screenQuality');
+  diagLine(`gremote preview diagnostic, ${new Date().toString()}`);
+  diagLine(`device: ${d.name} (${d.host}) type=${d.type}`);
+  diagLine(`quality setting: ${quality.value} (${quality.selectedOptions[0].textContent})`);
+  diagLine(`browser: ${navigator.userAgent}`);
+  diagLine(`page: ${location.protocol}//${location.host} secureContext=${window.isSecureContext} `
+    + `screen=${screen.width}x${screen.height} dpr=${window.devicePixelRatio}`);
+  diagLine(`support: WebCodecs=${WebCodecsPlayer.supported()} MSE=${MsePlayer.supported()} `
+    + `VideoDecoder=${'VideoDecoder' in window} MediaSource=${!!window.MediaSource} JMuxer=${!!window.JMuxer}`);
+  diagLine(`player chosen: ${WebCodecsPlayer.supported() ? 'WebCodecs' : MsePlayer.supported() ? 'MSE (jmuxer)' : 'still frames'}`);
+  screenRunning = true;
+  $('#screenToggle').textContent = 'Stop preview';
+  if (canPlayLive()) startLive(d); else { diagLine('no live player available in this browser'); stopScreen(); return; }
+  diag.timeout = setTimeout(() => stopScreen('15 s recording complete'), 15000);
+}
+
 function startLive(d) {
   $('#screenImg').hidden = true;
   livePlayer = WebCodecsPlayer.supported()
@@ -850,30 +900,37 @@ function startLive(d) {
     : new MsePlayer($('#screenVideo'));
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   const quality = $('#screenQuality').value;   // already "size=WxH&bitrate=N"; must not be escaped
-  const ws = new WebSocket(`${proto}://${location.host}/api/devices/${d.id}/screen/stream?${quality}`);
+  const ws = new WebSocket(`${proto}://${location.host}/api/devices/${d.id}/screen/stream?${quality}${diag ? "&diag=1" : ""}`);
+  ws.onopen = () => diagLine("websocket open");
   ws.binaryType = 'arraybuffer';
   liveWs = ws;
   let bytes = 0;
   let since = performance.now();
   ws.onmessage = (ev) => {
     if (typeof ev.data === 'string') {
-      try { stopScreen(`Failed: ${JSON.parse(ev.data).error}`); } catch { stopScreen('Stream error'); }
+      let msg = {};
+      try { msg = JSON.parse(ev.data); } catch { /* not JSON */ }
+      if (msg.diag) { diagLine(`server: ${msg.diag}`); return; }
+      diagLine(`server error: ${msg.error || ev.data}`);
+      stopScreen(msg.error ? `Failed: ${msg.error}` : 'Stream error');
       return;
     }
     bytes += ev.data.byteLength;
     try { livePlayer.feed(new Uint8Array(ev.data)); } catch (err) { stopScreen(`Failed: ${err.message}`); }
   };
-  ws.onclose = () => { if (screenRunning) stopScreen('Stream closed'); };
+  ws.onclose = (ev) => { diagLine(`websocket closed code=${ev.code}`); if (screenRunning) stopScreen('Stream closed'); };
   liveTimer = setInterval(() => {
     const secs = (performance.now() - since) / 1000;
     $('#screenStatus').hidden = false;
     $('#screenStatus').textContent = `${Math.round(bytes * 8 / 1000 / secs)} kbit/s · ${livePlayer.stats()}`;
+    diagLine(`client: ${$("#screenStatus").textContent} | ${livePlayer.debug()} | ws=${ws.readyState}`);
     bytes = 0;
     since = performance.now();
   }, 1000);
 }
 
 function stopScreen(message) {
+  if (message) diagLine(`stopped: ${message}`);
   stopLive();
   screenRunning = false;
   clearTimeout(screenTimer);
@@ -881,6 +938,7 @@ function stopScreen(message) {
   const status = $('#screenStatus');
   status.hidden = !message;
   status.textContent = message || '';
+  finishDiagnostic();
 }
 
 async function screenLoop(deviceId) {
@@ -944,6 +1002,10 @@ async function runBench() {
 
 document.addEventListener('DOMContentLoaded', () => {
   $('#screenBench').addEventListener('click', runBench);
+  $('#diagStart').addEventListener('click', startDiagnostic);
+  ['loadedmetadata', 'playing', 'waiting', 'stalled', 'error', 'resize', 'emptied'].forEach((t) => $('#screenVideo').addEventListener(t, () => diagLine(`video event: ${t}`)));
+  window.addEventListener('error', (e) => diagLine(`page error: ${e.message}`));
+  window.addEventListener('unhandledrejection', (e) => diagLine(`unhandled rejection: ${e.reason}`));
   $('#screenToggle').addEventListener('click', toggleScreen);
   $('#adbSupported').addEventListener('click', checkSupportedPages);
   $('#adbActivities').addEventListener('click', listActivities);

@@ -339,6 +339,27 @@ async def stream_h264(host: str, size: str = "1280x720", bitrate: int = 4_000_00
         await session.__aexit__()
 
 
+async def screen_diagnostics(host: str, port: int | None = None) -> str:
+    """What the TV says about a running screenrecord (second connection, read-only commands)."""
+    session = await connect_any(host, port)
+    lines = []
+    try:
+        for label, command in (
+            ("screenrecord stderr", "cat /data/local/tmp/gremote-sr.err"),
+            ("screenrecord processes", "ps -A | grep -i screenrecord"),
+            ("encoder-related log lines", "logcat -d -t 600 2>&1 | grep -i -E "
+             "'screenrecord|MediaCodec|OMX|encoder' | tail -25"),
+        ):
+            try:
+                out = await session.shell(command, timeout=15.0)
+            except DeviceError as exc:
+                out = f"(failed: {exc})"
+            lines.append(f"-- {label}\n{out or '(empty)'}")
+    finally:
+        await session.__aexit__()
+    return "\n".join(lines)
+
+
 async def benchmark(host: str, port: int | None = None) -> dict:
     """Time each stage of screen capture so we know where the preview is slow."""
     import shutil

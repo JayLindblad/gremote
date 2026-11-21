@@ -243,7 +243,7 @@ IDLE_FLUSH_SECONDS = 0.06
 
 @router.websocket("/{device_id}/screen/stream")
 async def device_screen_stream(ws: WebSocket, device_id: str, size: str = "1280x720",
-                               bitrate: int = 4_000_000):
+                               bitrate: int = 4_000_000, diag: int = 0):
     """Live H.264 video of the TV's screen: binary frames for the browser's MSE player."""
     device = get_device(device_id)
     if not device:
@@ -261,6 +261,24 @@ async def device_screen_stream(ws: WebSocket, device_id: str, size: str = "1280x
     if previous and not previous.done():
         previous.cancel()
     queue: asyncio.Queue = asyncio.Queue(maxsize=64)
+    send_lock = asyncio.Lock()
+    t0 = time.monotonic()
+    sent = {"bytes": 0, "first": False}
+
+    async def note(text: str) -> None:
+        """Diagnostic line for the browser's recorded log (only when it asked for one)."""
+        if diag:
+            async with send_lock:
+                await ws.send_json({"diag": f"{time.monotonic() - t0:6.2f}s {text}"})
+
+    async def send(data: bytes) -> None:
+        async with send_lock:
+            await ws.send_bytes(data)
+        if not sent["first"]:
+            sent["first"] = True
+            await note(f"first video bytes to browser ({len(data)} bytes, starts "
+                       f"{data[:12].hex(' ')})")
+        sent["bytes"] += len(data)
 
     async def produce():
         try:
@@ -277,7 +295,7 @@ async def device_screen_stream(ws: WebSocket, device_id: str, size: str = "1280x
                 item = await asyncio.wait_for(queue.get(), IDLE_FLUSH_SECONDS)
             except asyncio.TimeoutError:      # stream went quiet: the last frame is complete
                 if buf:
-                    await ws.send_bytes(buf)
+                    await send(buf)
                     buf = b""
                 continue
             if item is None:
@@ -287,12 +305,28 @@ async def device_screen_stream(ws: WebSocket, device_id: str, size: str = "1280x
             buf += item
             cut = buf.rfind(START_CODE)       # send only whole NAL units
             if cut > 0:
-                await ws.send_bytes(buf[:cut])
+                await send(buf[:cut])
                 buf = buf[cut:]
+
+    async def diagnostics():
+        """Server-side view while recording: byte counts and what the TV says about screenrecord."""
+        await note(f"stream requested: size={size} bitrate={bitrate} device={device['host']}")
+        elapsed = 0
+        while True:
+            await asyncio.sleep(1)
+            elapsed += 1
+            await note(f"relay: {sent['bytes']} bytes sent so far, queue={queue.qsize()}")
+            if elapsed in (4, 12):
+                try:
+                    report = await driver.screen_diagnostics()
+                except Exception as exc:
+                    report = f"could not collect: {type(exc).__name__}: {exc}"
+                await note(f"TV report at {elapsed}s:\n{report}")
 
     producer = asyncio.create_task(produce())
     relayer = asyncio.create_task(relay())
     listener = asyncio.create_task(ws.receive())    # completes when the browser goes away
+    diag_task = asyncio.create_task(diagnostics()) if diag else None
     _streams[device_id] = relayer
     debuglog.record("Live screen started", kind="command", device=device["name"], action="stream")
     try:
@@ -301,12 +335,14 @@ async def device_screen_stream(ws: WebSocket, device_id: str, size: str = "1280x
             exc = relayer.exception()
             debuglog.record(f"Live screen failed: {exc}", level="error", kind="command",
                             device=device["name"], action="stream", detail=_cause(exc))
-            await ws.send_json({"error": str(exc)})
+            async with send_lock:
+                await ws.send_json({"error": str(exc)})
     except Exception:
         pass
     finally:
-        for task in (producer, relayer, listener):
-            task.cancel()
+        for task in (producer, relayer, listener, diag_task):
+            if task:
+                task.cancel()
         try:
             await ws.close()
         except Exception:

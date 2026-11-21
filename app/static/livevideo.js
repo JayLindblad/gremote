@@ -174,3 +174,19 @@ class MsePlayer {
     this.video.removeAttribute('src');
   }
 }
+
+// Player internals for the recorded diagnostic log.
+WebCodecsPlayer.prototype.debug = function debug() {
+  const d = this.decoder;
+  return `decoder=${d ? d.state : 'none'} queue=${d ? d.decodeQueueSize : '-'} codec=${this.codec || '-'} `
+    + `gotKey=${this.gotKey} canvas=${this.canvas.width}x${this.canvas.height}`;
+};
+
+MsePlayer.prototype.debug = function debug() {
+  const v = this.video;
+  const ranges = [];
+  for (let i = 0; i < v.buffered.length; i++) ranges.push(`${v.buffered.start(i).toFixed(2)}-${v.buffered.end(i).toFixed(2)}`);
+  return `readyState=${v.readyState} networkState=${v.networkState} paused=${v.paused} `
+    + `t=${v.currentTime.toFixed(2)} buffered=[${ranges.join(', ')}] size=${v.videoWidth}x${v.videoHeight} `
+    + `error=${v.error ? `${v.error.code} ${v.error.message}` : 'none'}`;
+};
