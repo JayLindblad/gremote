@@ -195,10 +195,31 @@ async def open_settings(host: str, page: str | None = None, intent: str | None =
         raise ValueError("Unknown settings page, or invalid intent action")
     session = await connect_any(host, port)
     try:
-        out = await session.shell(f"am start -a {action}")
+        flag = "-n" if "/" in action else "-a"   # component (pkg/.Activity) or action
+        out = await session.shell(f"am start {flag} {action}")
     finally:
         await session.__aexit__()
     lowered = out.lower()
     if "error" in lowered or "unable to resolve" in lowered or "exception" in lowered:
         raise DeviceError(f"TV could not open {action}: {out[:300]}")
     return {"opened": action, "adb_port": session.port}
+
+
+async def list_activities(host: str, port: int | None = None) -> dict:
+    """Activities of the TV's Settings packages, to find the right page to open."""
+    import re
+
+    session = await connect_any(host, port)
+    try:
+        packages = await session.shell("pm list packages")
+        names = sorted({line.split(":", 1)[1].strip() for line in packages.splitlines()
+                        if line.startswith("package:")
+                        and re.search(r"settings|tv\.settings", line, re.I)})
+        found: dict[str, list[str]] = {}
+        for pkg in names[:6]:
+            dump = await session.shell(f"dumpsys package {pkg}")
+            acts = {m.group(1) for m in re.finditer(rf"\b({re.escape(pkg)}/[\w.$]+)", dump)}
+            found[pkg] = sorted(acts)
+        return {"packages": found, "adb_port": session.port}
+    finally:
+        await session.__aexit__()

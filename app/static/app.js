@@ -780,7 +780,23 @@ async function openSettingsPage(params) {
   if (r) toast('Opened on the TV');
 }
 
+async function listActivities() {
+  const d = singleDevice();
+  if (!d) return;
+  const out = $('#adbOut');
+  out.hidden = false;
+  out.textContent = 'Reading the TV’s Settings pages…';
+  try {
+    const { result } = await api('POST', `/api/devices/${d.id}/action`, { action: 'adb_activities' });
+    out.textContent = Object.entries(result.packages)
+      .map(([pkg, acts]) => `${pkg}:\n  ${acts.join('\n  ')}`).join('\n\n') || 'Nothing found';
+  } catch (err) {
+    if (!(err instanceof AuthError)) out.textContent = `Failed: ${err.message}`;
+  }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
+  $('#adbActivities').addEventListener('click', listActivities);
   const grid = $('#settingsPages');
   SETTINGS_PAGES.forEach(([page, label]) => {
     const b = document.createElement('button');

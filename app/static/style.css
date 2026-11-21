@@ -261,3 +261,4 @@ select {
 
 .inputs-row { display: flex; gap: 8px; margin-top: 8px; }
 .inputs-row input { flex: 1; min-width: 0; }
+#adbOut { white-space: pre-wrap; max-height: 280px; overflow: auto; font-size: 11px; user-select: text; }

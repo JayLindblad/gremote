@@ -144,12 +144,13 @@
         <p class="note">Needs <em>Network debugging</em> on in the TV's Developer options. The first time, the TV asks you to allow this computer: choose Always allow.</p>
         <div class="panel-actions">
           <button class="link" id="adbTest">Test ADB connection</button>
+          <button class="link" id="adbActivities">List this TV's Settings pages</button>
         </div>
         <pre class="note" id="adbOut" hidden></pre>
         <p class="note">Open a Google TV Settings page directly:</p>
         <div class="apps" id="settingsPages"></div>
         <div class="inputs-row">
-          <input id="adbIntent" placeholder="Custom intent action, e.g. android.settings.WIFI_SETTINGS" autocomplete="off" spellcheck="false">
+          <input id="adbIntent" placeholder="Intent action or package/.Activity from the list above" autocomplete="off" spellcheck="false">
           <button class="btn small" id="adbIntentGo">Open</button>
         </div>
       </details>
