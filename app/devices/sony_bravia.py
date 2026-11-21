@@ -29,6 +29,7 @@ from pybravia import (
     BraviaTurnedOff,
 )
 
+from . import adb
 from .base import DeviceDriver, DeviceError
 
 # Friendly name -> IRCC command *name* as reported by the TV. These are
@@ -328,6 +329,8 @@ class SonyBravia(DeviceDriver):
             return {"commands": await self.list_commands()}
         if name == "fetch_mac":
             return {"mac": await self.fetch_mac()}
+        if name == "adb_info":
+            return await adb.device_info(self.host, int(params.get("port", adb.ADB_PORT)))
         if name == "methods":
             return await self.methods()
         if name == "settings":

@@ -752,7 +752,22 @@ async function showMethods() {
   }
 }
 
+async function testAdb() {
+  const d = singleDevice();
+  if (!d) return;
+  const out = $('#adbOut');
+  out.hidden = false;
+  out.textContent = 'Connecting… if the TV shows an "Allow debugging?" prompt, choose Always allow.';
+  try {
+    const { result } = await api('POST', `/api/devices/${d.id}/action`, { action: 'adb_info' });
+    out.textContent = `Connected.\n${Object.entries(result).map(([k, v]) => `${k}: ${v}`).join('\n')}`;
+  } catch (err) {
+    if (!(err instanceof AuthError)) out.textContent = `Failed: ${err.message}`;
+  }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
+  $('#adbTest').addEventListener('click', testAdb);
   $('#loadTvSettings').addEventListener('click', loadTvSettings);
   $('#showMethods').addEventListener('click', showMethods);
   $('#openTvSettingsApp').addEventListener('click', () => run('launch_app', { title: 'Settings' }));
