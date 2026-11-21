@@ -182,8 +182,12 @@ class SonyBravia(DeviceDriver):
         for service in ("system", "audio", "videoScreen", "avContent", "appControl"):
             try:
                 res = await self._rpc(service, "getMethodTypes", [""], "1.0")
-                rows = res[0] if res and isinstance(res[0], list) else []
-                out[service] = sorted({r[0] for r in rows if isinstance(r, list) and r})
+                # "results" is a flat list of [name, request, response, version] rows.
+                rows = res if res and isinstance(res[0], list) and res[0] \
+                    and isinstance(res[0][0], str) else (res[0] if res else [])
+                out[service] = sorted({
+                    f"{r[0]} (v{r[3]})" if len(r) > 3 else str(r[0])
+                    for r in rows if isinstance(r, list) and r and isinstance(r[0], str)})
             except DeviceError as exc:
                 out[service] = [f"(unavailable: {exc})"]
         return {"methods": out}
