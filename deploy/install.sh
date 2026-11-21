@@ -64,11 +64,12 @@ EOF
   fi
 
   # `update` command
-  cat > /usr/local/bin/update <<EOF
+  rm -f /usr/local/bin/update   # old location; not on PATH under `pct enter`
+  cat > /usr/bin/update <<EOF
 #!/usr/bin/env bash
 exec bash $INSTALL_DIR/deploy/install.sh
 EOF
-  chmod 0755 /usr/local/bin/update
+  chmod 0755 /usr/bin/update
 
   cp deploy/gremote.service /etc/systemd/system/gremote.service
   systemctl daemon-reload
