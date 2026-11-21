@@ -322,8 +322,8 @@ class SonyBravia(DeviceDriver):
     async def screenshot(self) -> bytes:
         return await adb.screenshot(self.host)
 
-    def screen_stream(self):
-        return adb.stream_h264(self.host)
+    def screen_stream(self, size: str = "1280x720", bitrate: int = 4_000_000):
+        return adb.stream_h264(self.host, size, bitrate)
 
     async def action(self, name: str, params: dict | None = None) -> dict:
         params = params or {}

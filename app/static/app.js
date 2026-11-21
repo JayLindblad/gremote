@@ -830,28 +830,27 @@ async function checkSupportedPages() {
 let screenTimer = null;
 let screenRunning = false;
 
-// Live video (H.264 over a WebSocket, played through MSE by jmuxer); still frames are the fallback.
+// Live video: H.264 over a WebSocket, played by WebCodecs (HTTPS/localhost) or MSE (plain HTTP).
+// Still frames are the fallback for browsers with neither (e.g. iPhone).
 let liveWs = null;
-let liveMux = null;
+let livePlayer = null;
 let liveTimer = null;
-const canPlayLive = () => !!(window.JMuxer && window.MediaSource);
+const canPlayLive = () => WebCodecsPlayer.supported() || MsePlayer.supported();
 
 function stopLive() {
   clearInterval(liveTimer);
   if (liveWs) { liveWs.onclose = null; liveWs.close(); liveWs = null; }
-  if (liveMux) { try { liveMux.destroy(); } catch { /* already gone */ } liveMux = null; }
-  const video = $('#screenVideo');
-  video.hidden = true;
-  video.removeAttribute('src');
+  if (livePlayer) { livePlayer.destroy(); livePlayer = null; }
 }
 
 function startLive(d) {
-  const video = $('#screenVideo');
-  video.hidden = false;
   $('#screenImg').hidden = true;
-  liveMux = new JMuxer({ node: 'screenVideo', mode: 'video', fps: 30, flushingTime: 0, debug: false });
+  livePlayer = WebCodecsPlayer.supported()
+    ? new WebCodecsPlayer($('#screenCanvas'), (msg) => stopScreen(`Failed: ${msg}`))
+    : new MsePlayer($('#screenVideo'));
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const ws = new WebSocket(`${proto}://${location.host}/api/devices/${d.id}/screen/stream`);
+  const quality = encodeURIComponent($('#screenQuality').value);
+  const ws = new WebSocket(`${proto}://${location.host}/api/devices/${d.id}/screen/stream?${quality}`);
   ws.binaryType = 'arraybuffer';
   liveWs = ws;
   let bytes = 0;
@@ -862,21 +861,13 @@ function startLive(d) {
       return;
     }
     bytes += ev.data.byteLength;
-    liveMux.feed({ video: new Uint8Array(ev.data) });
+    try { livePlayer.feed(new Uint8Array(ev.data)); } catch (err) { stopScreen(`Failed: ${err.message}`); }
   };
   ws.onclose = () => { if (screenRunning) stopScreen('Stream closed'); };
-  // Stay near live: jump to the newest frame if playback falls behind, and show the rate.
   liveTimer = setInterval(() => {
-    const buffered = video.buffered;
-    if (buffered.length) {
-      const end = buffered.end(buffered.length - 1);
-      if (end - video.currentTime > 0.6) video.currentTime = end - 0.05;
-      if (video.paused) video.play().catch(() => {});
-    }
     const secs = (performance.now() - since) / 1000;
     $('#screenStatus').hidden = false;
-    $('#screenStatus').textContent = `Live video · ${Math.round(bytes * 8 / 1000 / secs)} kbit/s`
-      + (video.videoWidth ? ` · ${video.videoWidth}×${video.videoHeight}` : ' · waiting for the first frame…');
+    $('#screenStatus').textContent = `${Math.round(bytes * 8 / 1000 / secs)} kbit/s · ${livePlayer.stats()}`;
     bytes = 0;
     since = performance.now();
   }, 1000);

@@ -1,6 +1,7 @@
 """Device registry CRUD plus status/action endpoints."""
 
 import asyncio
+import re
 import time
 import traceback
 
@@ -237,11 +238,12 @@ async def device_screen(device_id: str):
 
 _streams: dict[str, asyncio.Task] = {}     # one live stream per device; a new viewer replaces it
 START_CODE = b"\x00\x00\x00\x01"
-IDLE_FLUSH_SECONDS = 0.15
+IDLE_FLUSH_SECONDS = 0.06
 
 
 @router.websocket("/{device_id}/screen/stream")
-async def device_screen_stream(ws: WebSocket, device_id: str):
+async def device_screen_stream(ws: WebSocket, device_id: str, size: str = "1280x720",
+                               bitrate: int = 4_000_000):
     """Live H.264 video of the TV's screen: binary frames for the browser's MSE player."""
     device = get_device(device_id)
     if not device:
@@ -249,6 +251,9 @@ async def device_screen_stream(ws: WebSocket, device_id: str):
         return
     driver = driver_for(device)
     if not hasattr(driver, "screen_stream"):
+        await ws.close(code=4422)
+        return
+    if not re.fullmatch(r"d{3,4}xd{3,4}", size) or not 250_000 <= bitrate <= 20_000_000:
         await ws.close(code=4422)
         return
     await ws.accept()
@@ -259,7 +264,7 @@ async def device_screen_stream(ws: WebSocket, device_id: str):
 
     async def produce():
         try:
-            async for chunk in driver.screen_stream():
+            async for chunk in driver.screen_stream(size, bitrate):
                 await queue.put(chunk)
             await queue.put(None)
         except Exception as exc:    # reported to the browser below
