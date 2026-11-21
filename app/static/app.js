@@ -882,7 +882,24 @@ function toggleScreen() {
   screenLoop(d.id);
 }
 
+async function runBench() {
+  const d = singleDevice();
+  if (!d) return;
+  if (screenRunning) stopScreen();
+  const out = $('#benchOut');
+  out.hidden = false;
+  out.textContent = 'Benchmarking (about 30 seconds)…';
+  try {
+    const { result } = await api('POST', `/api/devices/${d.id}/action`, { action: 'adb_bench' });
+    out.textContent = result.steps.map((s) => `[${s.ms} ms] ${s.step}\n${s.output}`).join('\n\n')
+      + `\n\nOn the gremote server: ${Object.entries(result.server_tools).map(([k, v]) => `${k}=${v || 'not installed'}`).join(', ')}`;
+  } catch (err) {
+    if (!(err instanceof AuthError)) out.textContent = `Failed: ${err.message}`;
+  }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
+  $('#screenBench').addEventListener('click', runBench);
   $('#screenToggle').addEventListener('click', toggleScreen);
   $('#adbSupported').addEventListener('click', checkSupportedPages);
   $('#adbActivities').addEventListener('click', listActivities);

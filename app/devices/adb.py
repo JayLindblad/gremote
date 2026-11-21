@@ -285,6 +285,47 @@ async def screenshot(host: str, port: int | None = None) -> bytes:
     raise DeviceError("screenshot failed")
 
 
+async def benchmark(host: str, port: int | None = None) -> dict:
+    """Time each stage of screen capture so we know where the preview is slow."""
+    import shutil
+
+    session = await connect_any(host, port)
+    steps: list[dict] = []
+
+    async def step(name: str, command: str, timeout: float = 30.0, keep: int = 400):
+        started = time.monotonic()
+        try:
+            out = await session.shell(command, timeout=timeout)
+        except DeviceError as exc:
+            out = f"FAILED: {exc}"
+        steps.append({"step": name, "ms": int((time.monotonic() - started) * 1000),
+                      "output": out[:keep]})
+
+    try:
+        await step("display size", "wm size; wm density")
+        await step("cpu / android", "getprop ro.product.cpu.abi; getprop ro.build.version.sdk; "
+                                    "getprop ro.product.model; nproc")
+        await step("tools present", "for t in screencap screenrecord base64 gzip ffmpeg; do "
+                                    "echo $t=$(command -v $t); done")
+        await step("screencap options", "screencap -h 2>&1 | head -15", keep=900)
+        await step("screenrecord options", "screenrecord --help 2>&1 | head -30", keep=1500)
+        await step("round trip (tiny command)", "echo ok")
+        await step("screencap raw, discarded on TV (capture cost)", "screencap > /dev/null")
+        await step("screencap PNG, discarded on TV (capture + PNG encode)",
+                   "screencap -p > /dev/null")
+        await step("PNG size in bytes", "screencap -p | wc -c")
+        await step("transport: 2 MB of base64 text over this ADB link",
+                   "head -c 1500000 /dev/zero | base64 -w 0", keep=40)
+        await step("screenrecord H.264 1280x720, 3 s, bytes produced",
+                   "screenrecord --time-limit 3 --size 1280x720 --bit-rate 4000000 "
+                   "--output-format=h264 - 2>/data/local/tmp/sr.err | wc -c; "
+                   "head -c 300 /data/local/tmp/sr.err", timeout=40)
+    finally:
+        await session.__aexit__()
+    server = {t: shutil.which(t) for t in ("adb", "ffmpeg")}
+    return {"steps": steps, "server_tools": server, "adb_port": session.port}
+
+
 async def supported_pages(host: str, port: int | None = None) -> dict:
     """Which Settings shortcuts this TV can actually resolve (differs per model/vendor)."""
     session = await connect_any(host, port)
