@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>gremote decoder test</title>
+  <style>
+    body { font: 14px system-ui, sans-serif; margin: 16px; max-width: 900px; }
+    pre { background: #111; color: #ddd; padding: 12px; border-radius: 8px; white-space: pre-wrap; user-select: text; }
+    button { font: inherit; padding: 6px 12px; }
+  </style>
+</head>
+<body>
+  <h1>Decoder test</h1>
+  <p>Choose the <code>tv-sample.h264</code> you downloaded from gremote. This tries several ways of giving it to your
+  browser's video decoder and reports which work. It runs entirely in your browser; nothing is uploaded.</p>
+  <input type="file" id="file" accept=".h264,.264,application/octet-stream">
+  <button id="copy">Copy report</button>
+  <pre id="out">Waiting for a file…</pre>
+  <script src="/static/livevideo.js"></script>
+  <script>
+    const out = document.getElementById('out');
+    const lines = [];
+    const log = (t) => { lines.push(t); out.textContent = lines.join('\n'); };
+    document.getElementById('copy').onclick = () => navigator.clipboard.writeText(lines.join('\n'));
+
+    const AVC_VARIANTS = [
+      { name: 'A  length-prefixed + description, optimizeForLatency', avcc: true, extra: { optimizeForLatency: true } },
+      { name: 'B  length-prefixed + description', avcc: true, extra: {} },
+      { name: 'C  length-prefixed + description, prefer-software', avcc: true, extra: { hardwareAcceleration: 'prefer-software' } },
+      { name: 'D  length-prefixed + description, prefer-hardware', avcc: true, extra: { hardwareAcceleration: 'prefer-hardware' } },
+      { name: 'E  Annex B (start codes, SPS/PPS in the keyframe)', avcc: false, extra: {} },
+      { name: 'F  Annex B, prefer-software', avcc: false, extra: { hardwareAcceleration: 'prefer-software' } },
+    ];
+
+    function cat(parts) { const o = new Uint8Array(parts.reduce((n, p) => n + p.length, 0)); let a = 0; parts.forEach((p) => { o.set(p, a); a += p.length; }); return o; }
+    const SC = new Uint8Array([0, 0, 0, 1]);
+
+    async function runVariant(v, nals, sps, pps) {
+      const codec = 'avc1.' + [sps[1], sps[2], sps[3]].map((b) => b.toString(16).padStart(2, '0')).join('');
+      const config = { codec, ...v.extra };
+      if (v.avcc) {
+        config.description = cat([new Uint8Array([1, sps[1], sps[2], sps[3], 0xff, 0xe1, sps.length >> 8, sps.length & 255]), sps,
+          new Uint8Array([1, pps.length >> 8, pps.length & 255]), pps]);
+      } else {
+        config.avc = { format: 'annexb' };
+      }
+      const support = await VideoDecoder.isConfigSupported(config).catch((e) => ({ supported: false, error: String(e) }));
+      if (!support.supported) { log(`${v.name}\n   config not supported ${support.error || ''}`); return; }
+      let frames = 0; let error = null; let firstMs = null; const t0 = performance.now();
+      const dec = new VideoDecoder({
+        output: (f) => { frames++; if (firstMs === null) firstMs = Math.round(performance.now() - t0); f.close(); },
+        error: (e) => { error = `${e.name}: ${e.message}`; },
+      });
+      dec.configure(config);
+      let sent = 0; let ts = 0;
+      for (const nal of nals) {
+        const type = nal[0] & 31;
+        if (type !== 1 && type !== 5) continue;
+        const key = type === 5;
+        let data;
+        if (v.avcc) { data = new Uint8Array(4 + nal.length); new DataView(data.buffer).setUint32(0, nal.length); data.set(nal, 4); }
+        else data = key ? cat([SC, sps, SC, pps, SC, nal]) : cat([SC, nal]);
+        if (dec.state !== 'configured') break;
+        dec.decode(new EncodedVideoChunk({ type: key ? 'key' : 'delta', timestamp: (ts += 33333), data }));
+        sent++;
+        if (sent >= 60) break;
+      }
+      try { await dec.flush(); } catch (e) { error = error || `flush: ${e.name}: ${e.message}`; }
+      log(`${v.name}\n   sent ${sent} frames, decoded ${frames}, first frame after ${firstMs} ms, ${error ? 'ERROR ' + error : 'no error'}`);
+      if (dec.state !== 'closed') dec.close();
+    }
+
+    document.getElementById('file').onchange = async (ev) => {
+      lines.length = 0;
+      const file = ev.target.files[0];
+      if (!file) return;
+      log(`browser: ${navigator.userAgent}`);
+      log(`secure context: ${window.isSecureContext}, VideoDecoder: ${'VideoDecoder' in window}`);
+      if (!('VideoDecoder' in window)) { log('This page must be opened over https:// (or localhost) in a browser with WebCodecs.'); return; }
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const nals = splitNals(bytes);
+      const sps = nals.find((n) => (n[0] & 31) === 7).slice();
+      const pps = nals.find((n) => (n[0] & 31) === 8).slice();
+      log(`file ${bytes.length} bytes, ${nals.length} NAL units; SPS ${sps.length} bytes, PPS ${pps.length} bytes\n`);
+      for (const v of AVC_VARIANTS) {
+        try { await runVariant(v, nals, sps, pps); } catch (e) { log(`${v.name}\n   threw ${e.name}: ${e.message}`); }
+      }
+      log('\ndone');
+    };
+  </script>
+</body>
+</html>
