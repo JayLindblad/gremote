@@ -64,6 +64,8 @@ class WebCodecsPlayer {
     this.skipped = 0;
     this.dead = false;
     this.nals = {};
+    this.chunks = 0;
+    this.configKey = null;
     canvas.hidden = false;
     const paint = () => {
       if (this.dead) return;
@@ -82,10 +84,19 @@ class WebCodecsPlayer {
     this.raf = requestAnimationFrame(paint);
   }
 
-  configure(sps) {
+  // Browsers agree on the AVCC form (length-prefixed NAL units plus an avcC description built
+  // from the stream's SPS/PPS); the raw Annex B form is not accepted everywhere.
+  configure() {
+    const { sps, pps } = this;
     const hex = [sps[1], sps[2], sps[3]].map((b) => b.toString(16).padStart(2, '0')).join('');
     const codec = `avc1.${hex}`;
-    if (codec === this.codec && this.decoder && this.decoder.state === 'configured') return;
+    const description = concatBytes([
+      new Uint8Array([1, sps[1], sps[2], sps[3], 0xff, 0xe1, sps.length >> 8, sps.length & 255]), sps,
+      new Uint8Array([1, pps.length >> 8, pps.length & 255]), pps,
+    ]);
+    const key = `${codec}/${sps.length}/${pps.length}/${Array.from(sps.subarray(4, 12)).join(',')}`;
+    if (key === this.configKey && this.decoder && this.decoder.state === 'configured') return;
+    this.configKey = key;
     if (this.decoder && this.decoder.state !== 'closed') this.decoder.close();
     this.codec = codec;
     this.gotKey = false;
@@ -95,9 +106,13 @@ class WebCodecsPlayer {
         this.latest = frame;
         this.frames++;
       },
-      error: (e) => this.onError(`Video decoder: ${e.message}`),
+      error: (e) => this.onError(`Video decoder: ${e.name || 'error'}: ${e.message} (codec ${codec}, ${this.chunks} chunks sent)`),
     });
-    this.decoder.configure({ codec, optimizeForLatency: true, avc: { format: 'annexb' } });
+    const config = { codec, description, optimizeForLatency: true };
+    VideoDecoder.isConfigSupported(config).then((res) => {
+      if (!res.supported) this.onError(`This browser cannot decode ${codec}`);
+    }).catch(() => {});
+    this.decoder.configure(config);
   }
 
   feed(u8) {
@@ -105,8 +120,8 @@ class WebCodecsPlayer {
     for (const nal of splitNals(u8)) {
       const type = nal[0] & 31;
       countNal(this.nals, type);
-      if (type === 7) { this.sps = nal; this.configure(nal); }
-      else if (type === 8) this.pps = nal;
+      if (type === 7) { this.sps = nal.slice(); }
+      else if (type === 8) { this.pps = nal.slice(); if (this.sps) this.configure(); }
       else if (type === 5 || type === 1) this.decode(nal, type === 5);
     }
   }
@@ -115,10 +130,11 @@ class WebCodecsPlayer {
     if (!this.decoder || this.decoder.state !== 'configured') return;
     if (key) this.gotKey = true;
     if (!this.gotKey) return;                       // cannot start on a delta frame
-    const data = key && this.sps && this.pps
-      ? concatBytes([START_CODE, this.sps, START_CODE, this.pps, START_CODE, nal])
-      : concatBytes([START_CODE, nal]);
+    const data = new Uint8Array(4 + nal.length);
+    new DataView(data.buffer).setUint32(0, nal.length);     // 4-byte length prefix
+    data.set(nal, 4);
     this.timestamp += 33333;
+    this.chunks++;
     this.decoder.decode(new EncodedVideoChunk({ type: key ? 'key' : 'delta', timestamp: this.timestamp, data }));
   }
 
