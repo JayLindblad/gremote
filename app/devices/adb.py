@@ -298,33 +298,74 @@ async def _raise_encoder_error(session, size: str, exc) -> None:
         raise DeviceError(f"The TV's screenrecord ended without producing video at {size}")
 
 
+async def _raw_pty_ok(session) -> bool:
+    """Can binary data cross this shell channel untouched once the TV's pty post-processing is off?
+
+    Writes 64 KB of random bytes on the TV, reads them back with `stty -opost`, and compares
+    checksums. If this passes, the video needs no base64 detour (no 4 KB output batching,
+    a third less data).
+    """
+    import hashlib
+
+    path = "/data/local/tmp/gremote-raw.bin"
+    try:
+        await session.shell(f"head -c 65536 /dev/urandom > {path}", timeout=15.0)
+        want = (await session.shell(f"md5sum < {path}", timeout=15.0)).split()[:1]
+        digest, size = hashlib.md5(), 0
+        async for chunk in session._dev.streaming_shell(
+                f"stty -opost; cat {path}", transport_timeout_s=10.0, read_timeout_s=10.0,
+                decode=False):
+            digest.update(chunk)
+            size += len(chunk)
+        return bool(want) and digest.hexdigest() == want[0] and size == 65536
+    except Exception:
+        return False
+
+
+# How long the relay waits for more bytes before treating the tail as a whole frame.
+# Raw mode delivers a frame within milliseconds; base64 mode arrives in ~4 KB batches.
+QUIET_RAW = 0.06
+QUIET_BASE64 = 0.35
+
+
 async def stream_h264(host: str, size: str = "1280x720", bitrate: int = 4_000_000,
                       port: int | None = None):
     """Yield raw H.264 (Annex B) chunks from the TV's screenrecord, restarting it every ~3 min.
 
-    The shell channel is a pty that rewrites newlines, so the stream is piped through base64
-    on the TV and decoded here; whitespace in the text is ignored.
+    The first item is ("mode", "raw" | "base64", quiet_seconds). In raw mode the shell's pty is
+    switched to pass bytes through unchanged; otherwise the video is piped through base64 on
+    the TV (the pty rewrites newlines) and decoded here, ignoring whitespace.
     """
     if not re.fullmatch(r"\d{3,4}x\d{3,4}", size):
         raise ValueError("size must look like 1280x720")
     session = await connect_any(host, port)
+    record = (f"screenrecord --time-limit 170 --size {size} --bit-rate {int(bitrate)} "
+              "--output-format=h264 - 2>/data/local/tmp/gremote-sr.err")
+    raw = await _raw_pty_ok(session)
     command = ("rm -f /data/local/tmp/gremote-sr.err; "
-               f"screenrecord --time-limit 170 --size {size} --bit-rate {int(bitrate)} "
-               "--output-format=h264 - 2>/data/local/tmp/gremote-sr.err | base64")
+               + (f"stty -opost; {record}" if raw else f"{record} | base64"))
+    yield ("mode", "raw" if raw else "base64", QUIET_RAW if raw else QUIET_BASE64)
     failures = 0
     try:
         while failures < 3:
             got_data = False
             pending = ""
             try:
-                async for chunk in session._dev.streaming_shell(
-                        command, transport_timeout_s=10.0, read_timeout_s=60.0):
-                    pending += "".join(chunk.split())
-                    usable = len(pending) - len(pending) % 4
-                    if usable:
-                        got_data = True
-                        yield base64.b64decode(pending[:usable])
-                        pending = pending[usable:]
+                if raw:
+                    async for chunk in session._dev.streaming_shell(
+                            command, transport_timeout_s=10.0, read_timeout_s=60.0, decode=False):
+                        if chunk:
+                            got_data = True
+                            yield bytes(chunk)
+                else:
+                    async for chunk in session._dev.streaming_shell(
+                            command, transport_timeout_s=10.0, read_timeout_s=60.0):
+                        pending += "".join(chunk.split())
+                        usable = len(pending) - len(pending) % 4
+                        if usable:
+                            got_data = True
+                            yield base64.b64decode(pending[:usable])
+                            pending = pending[usable:]
             except Exception as exc:    # read timeout, dropped link, ...
                 if not got_data:
                     await _raise_encoder_error(session, size, exc)

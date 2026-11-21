@@ -238,23 +238,21 @@ async def device_screen(device_id: str):
 
 _streams: dict[str, asyncio.Task] = {}     # one live stream per device; a new viewer replaces it
 START_CODE = b"\x00\x00\x00\x01"
-IDLE_FLUSH_SECONDS = 0.06     # a small frame is assumed complete after this much quiet
 BIG_FRAME_BYTES = 8000
-BIG_FRAME_FLUSH_SECONDS = 0.25    # large frames trickle in; do not cut them in half
-KEYFRAME_FLUSH_SECONDS = 0.4
 
 
-def _flush_after(buf: bytes) -> float | None:
+def _flush_after(buf: bytes, quiet: float) -> float | None:
     """How long to wait for more data before treating the buffered tail as a whole NAL unit.
 
-    None means wait indefinitely: the buffer holds only a start code, so sending it would cut
-    the next frame in two.
+    `quiet` is the stream's own pace (short when bytes arrive promptly, long when they come in
+    batches). None means wait indefinitely: the buffer holds only a start code, so sending it
+    would cut the next frame in two.
     """
     if len(buf) <= len(START_CODE) + 1:
         return None
     if buf.startswith(START_CODE) and buf[4] & 31 == 5:     # IDR keyframe
-        return KEYFRAME_FLUSH_SECONDS
-    return BIG_FRAME_FLUSH_SECONDS if len(buf) > BIG_FRAME_BYTES else IDLE_FLUSH_SECONDS
+        return max(quiet, 0.15)
+    return max(quiet, 0.1) if len(buf) > BIG_FRAME_BYTES else quiet
 
 
 @router.websocket("/{device_id}/screen/stream")
@@ -280,6 +278,7 @@ async def device_screen_stream(ws: WebSocket, device_id: str, size: str = "1280x
     send_lock = asyncio.Lock()
     t0 = time.monotonic()
     sent = {"bytes": 0, "first": False}
+    quiet = {"seconds": 0.35}      # replaced by the stream's own pace once it reports its mode
 
     async def note(text: str) -> None:
         """Diagnostic line for the browser's recorded log (only when it asked for one)."""
@@ -308,7 +307,7 @@ async def device_screen_stream(ws: WebSocket, device_id: str, size: str = "1280x
         buf = b""
         while True:
             try:
-                item = await asyncio.wait_for(queue.get(), _flush_after(buf))
+                item = await asyncio.wait_for(queue.get(), _flush_after(buf, quiet["seconds"]))
             except asyncio.TimeoutError:      # stream went quiet: the last frame is complete
                 if buf:
                     await send(buf)
@@ -318,6 +317,10 @@ async def device_screen_stream(ws: WebSocket, device_id: str, size: str = "1280x
                 return
             if isinstance(item, Exception):
                 raise item
+            if isinstance(item, tuple):         # ("mode", name, quiet_seconds) from the stream
+                quiet["seconds"] = item[2]
+                await note(f"capture mode: {item[1]} (frame is complete after {item[2]} s of quiet)")
+                continue
             buf += item
             cut = buf.rfind(START_CODE)       # send only whole NAL units
             if cut > 0:
@@ -384,7 +387,8 @@ async def device_screen_sample(device_id: str, size: str = "1024x576",
 
     async def collect():
         async for chunk in driver.screen_stream(size, bitrate):
-            chunks.append(chunk)
+            if isinstance(chunk, bytes):        # skip the leading ("mode", ...) announcement
+                chunks.append(chunk)
 
     try:
         await asyncio.wait_for(collect(), seconds + 1.5)    # stops on the timer, by design
