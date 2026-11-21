@@ -158,7 +158,10 @@ class SonyBravia(DeviceDriver):
             raise DeviceError(f"{self.host}: {_chain(exc)}") from exc
         if isinstance(data, dict) and "error" in data:
             raise DeviceError(f"{service}.{method}: TV error {data['error']}")
-        result = data.get("result") if isinstance(data, dict) else None
+        # getMethodTypes answers with "results" (plural); everything else "result".
+        result = None
+        if isinstance(data, dict):
+            result = data.get("result", data.get("results"))
         if not isinstance(result, list):
             raise DeviceError(f"{service}.{method}: unexpected reply {str(data)[:200]}")
         return result
@@ -190,18 +193,22 @@ class SonyBravia(DeviceDriver):
         items: list[dict] = []
         problems: dict[str, str] = {}
 
-        async def collect(group: str, service: str, method: str, versions):
-            try:
-                res = await self._rpc_versions(service, method, [{"target": ""}], versions)
-            except DeviceError as exc:
-                problems[group] = str(exc)
+        async def collect(group: str, service: str, methods: tuple[str, ...], versions):
+            last = ""
+            for method in methods:     # method names differ between models
+                try:
+                    res = await self._rpc_versions(service, method, [{"target": ""}], versions)
+                except DeviceError as exc:
+                    last = str(exc)
+                    continue
+                for row in res[0] if res and isinstance(res[0], list) else []:
+                    if isinstance(row, dict) and row.get("target"):
+                        items.append(_setting_item(group, row))
                 return
-            for row in res[0] if res and isinstance(res[0], list) else []:
-                if isinstance(row, dict) and row.get("target"):
-                    items.append(_setting_item(group, row))
+            problems[group] = last
 
-        await collect("picture", "videoScreen", "getPictureQualitySettings", ("1.0",))
-        await collect("sound", "audio", "getSoundSettings", ("1.1", "1.0"))
+        await collect("picture", "videoScreen", ("getPictureQualitySettings",), ("1.0",))
+        await collect("sound", "audio", ("getSoundSettings", "getSpeakerSettings"), ("1.1", "1.0"))
 
         try:
             res = await self._rpc("system", "getPowerSavingMode", [], "1.0")
@@ -224,9 +231,11 @@ class SonyBravia(DeviceDriver):
             await self._rpc("videoScreen", "setPictureQualitySettings",
                             [{"settings": [{"target": target, "value": value}]}], "1.0")
         elif group == "sound":
-            await self._rpc_versions("audio", "setSoundSettings",
-                                     [{"settings": [{"target": target, "value": value}]}],
-                                     ("1.1", "1.0"))
+            body = [{"settings": [{"target": target, "value": value}]}]
+            try:
+                await self._rpc_versions("audio", "setSoundSettings", body, ("1.1", "1.0"))
+            except DeviceError:      # some models only have the "Speaker" variant
+                await self._rpc("audio", "setSpeakerSettings", body, "1.0")
         else:
             if target != "powerSavingMode":
                 raise ValueError(f"Unknown system setting: {target}")
