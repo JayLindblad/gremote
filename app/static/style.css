@@ -258,3 +258,6 @@ select {
 .set-row select { flex: 1 1 40%; min-height: 36px; }
 .set-row output { min-width: 28px; text-align: right; font-size: 12px; }
 #methodsOut { white-space: pre-wrap; max-height: 260px; overflow: auto; font-size: 11px; }
+
+.inputs-row { display: flex; gap: 8px; margin-top: 8px; }
+.inputs-row input { flex: 1; min-width: 0; }
