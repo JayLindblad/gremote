@@ -1,52 +1,177 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <meta name="theme-color" content="#0e1015">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
   <title>gremote</title>
-  <link rel="stylesheet" href="/static/style.css" />
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/static/icon.svg">
+  <link rel="manifest" href="/static/manifest.webmanifest">
+  <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
   <!-- Login -->
   <div id="login" class="login-screen">
     <form id="login-form" class="login-card">
       <h1>gremote</h1>
-      <p class="muted">Home-network remote control</p>
-      <input id="password" type="password" placeholder="Password" autocomplete="current-password" autofocus />
-      <button type="submit">Sign in</button>
+      <p class="note">Home-network remote control</p>
+      <input id="password" type="password" placeholder="Password" autocomplete="current-password" autofocus>
+      <button class="btn primary wide" type="submit">Sign in</button>
       <div id="login-error" class="error"></div>
     </form>
   </div>
 
-  <!-- Dashboard -->
-  <div id="dashboard" class="dashboard" style="display: none">
-    <header class="topbar">
-      <h1>gremote</h1>
-      <div class="spacer"></div>
-      <button id="refresh-all" class="ghost">Refresh</button>
-      <button id="logout" class="ghost">Sign out</button>
+  <!-- Remote -->
+  <div id="app" hidden>
+    <header class="top">
+      <div class="tv-tabs" id="tabs" role="tablist" aria-label="Choose device"></div>
+      <button class="icon-btn" id="openSettings" aria-label="Manage devices" title="Manage devices">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      </button>
     </header>
 
-    <main>
-      <section class="panel">
-        <div class="panel-head">
-          <h2>Add device</h2>
-          <button id="scan-network" type="button" class="ghost">Scan network</button>
+    <div class="status" id="statusBar"></div>
+
+    <main class="remote" id="remote">
+      <section class="row power-row">
+        <button class="btn power" data-action="toggle_power" aria-label="Power" title="Power (P)">
+          <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 3v9"/><path d="M6.3 6.8a8 8 0 1 0 11.4 0"/></svg>
+        </button>
+        <div class="pill-group">
+          <button class="btn small" data-action="power_on" title="Power on">On</button>
+          <button class="btn small" data-action="power_off" title="Power off">Off</button>
+          <button class="btn small" data-action="wake" title="Send Wake-on-LAN packet">Wake</button>
         </div>
-        <form id="add-form" class="add-form">
-          <input id="device-name" placeholder="Name (e.g. Living room TV)" required />
-          <select id="device-type"></select>
-          <input id="device-host" placeholder="IP address" required />
-          <input id="device-mac" placeholder="MAC (for Wake-on-LAN)" />
-          <input id="device-psk" placeholder="PSK (Sony TVs only)" />
-          <button type="submit">Add</button>
-        </form>
-        <div id="discovery-results"></div>
+        <button class="btn" data-ircc="input" title="Cycle input (S)">Input</button>
       </section>
 
-      <section id="device-list" class="device-list"></section>
+      <section class="dpad" aria-label="Navigation">
+        <button class="dir up" data-ircc="up" data-repeat aria-label="Up"><span>▲</span></button>
+        <button class="dir left" data-ircc="left" data-repeat aria-label="Left"><span>◀</span></button>
+        <button class="ok" data-ircc="confirm" aria-label="OK">OK</button>
+        <button class="dir right" data-ircc="right" data-repeat aria-label="Right"><span>▶</span></button>
+        <button class="dir down" data-ircc="down" data-repeat aria-label="Down"><span>▼</span></button>
+      </section>
+
+      <section class="row three">
+        <button class="btn" data-ircc="back" title="Back (Backspace)">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>
+          <span>Back</span>
+        </button>
+        <button class="btn" data-ircc="home" title="Home (H)">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>
+          <span>Home</span>
+        </button>
+        <button class="btn" data-ircc="Options" title="Options menu">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+          <span>Options</span>
+        </button>
+      </section>
+
+      <section class="rockers">
+        <div class="rocker">
+          <button data-ircc="volume_up" data-repeat aria-label="Volume up" title="Volume up (+)">+</button>
+          <span class="rocker-label">VOL</span>
+          <button data-ircc="volume_down" data-repeat aria-label="Volume down" title="Volume down (−)">−</button>
+        </div>
+        <div class="mid-col">
+          <button class="btn round" data-action="toggle_mute" title="Mute (M)" aria-label="Mute">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4z"/><path d="m23 9-6 6M17 9l6 6"/></svg>
+          </button>
+        </div>
+        <div class="rocker">
+          <button data-ircc="channel_up" data-repeat aria-label="Channel up" title="Channel up (PgUp)">˄</button>
+          <span class="rocker-label">CH</span>
+          <button data-ircc="channel_down" data-repeat aria-label="Channel down" title="Channel down (PgDn)">˅</button>
+        </div>
+      </section>
+
+      <section class="row media">
+        <button class="btn" data-ircc="Rewind" aria-label="Rewind">&#x23EA;&#xFE0E;</button>
+        <button class="btn" data-ircc="play" aria-label="Play">▶</button>
+        <button class="btn" data-ircc="pause" aria-label="Pause">&#x23F8;&#xFE0E;</button>
+        <button class="btn" data-ircc="stop" aria-label="Stop">&#x23F9;&#xFE0E;</button>
+        <button class="btn" data-ircc="Forward" aria-label="Fast forward">&#x23E9;&#xFE0E;</button>
+      </section>
+
+      <details class="panel" open>
+        <summary>Volume &amp; input</summary>
+        <div class="vol-wrap">
+          <input type="range" id="volSlider" min="0" max="100" value="0" aria-label="Volume">
+          <output id="volOut">—</output>
+        </div>
+        <div class="row inputs">
+          <button class="btn small" data-input="tv">TV</button>
+          <button class="btn small" data-input="hdmi1">HDMI 1</button>
+          <button class="btn small" data-input="hdmi2">HDMI 2</button>
+          <button class="btn small" data-input="hdmi3">HDMI 3</button>
+          <button class="btn small" data-input="hdmi4">HDMI 4</button>
+        </div>
+      </details>
+
+      <details class="panel" id="appsPanel" open>
+        <summary>Apps</summary>
+        <div class="apps" id="apps"></div>
+        <div class="panel-actions">
+          <button class="link" id="loadApps">Load installed apps from TV</button>
+        </div>
+      </details>
+
+      <details class="panel">
+        <summary>Numbers &amp; more</summary>
+        <div class="numpad">
+          <button class="btn" data-ircc="Num1">1</button><button class="btn" data-ircc="Num2">2</button><button class="btn" data-ircc="Num3">3</button>
+          <button class="btn" data-ircc="Num4">4</button><button class="btn" data-ircc="Num5">5</button><button class="btn" data-ircc="Num6">6</button>
+          <button class="btn" data-ircc="Num7">7</button><button class="btn" data-ircc="Num8">8</button><button class="btn" data-ircc="Num9">9</button>
+          <button class="btn" data-ircc="Display">Info</button><button class="btn" data-ircc="Num0">0</button><button class="btn" data-ircc="Exit">Exit</button>
+        </div>
+        <div class="colors">
+          <button class="btn c-red" data-ircc="Red" aria-label="Red"></button>
+          <button class="btn c-green" data-ircc="Green" aria-label="Green"></button>
+          <button class="btn c-yellow" data-ircc="Yellow" aria-label="Yellow"></button>
+          <button class="btn c-blue" data-ircc="Blue" aria-label="Blue"></button>
+        </div>
+        <form id="keyForm" class="inline-form">
+          <input id="keyInput" placeholder="Any IRCC command name, e.g. Netflix" aria-label="Custom IRCC command" autocomplete="off">
+          <button class="btn small" type="submit">Send</button>
+        </form>
+      </details>
+
+      <p class="hint">Keyboard: arrows · Enter · Backspace = Back · H = Home · +/− volume · M mute · P power · Space play/pause</p>
     </main>
   </div>
+
+  <!-- Settings dialog -->
+  <dialog id="settings">
+    <div class="dlg-head">
+      <h2>Your devices</h2>
+      <button class="icon-btn" id="closeSettings" aria-label="Close">✕</button>
+    </div>
+    <div id="deviceList" class="tv-list"></div>
+
+    <h3>Find TVs on your network</h3>
+    <button class="btn wide" id="scanBtn">Scan network</button>
+    <div id="discovered" class="tv-list"></div>
+
+    <h3>Add a device</h3>
+    <form id="addForm" class="add-form">
+      <input name="name" placeholder="Name (e.g. Living room TV)" required autocomplete="off">
+      <select name="type" id="deviceType"></select>
+      <input name="host" placeholder="IP address, e.g. 192.168.1.50" required autocomplete="off" inputmode="decimal">
+      <input name="mac" placeholder="MAC for Wake-on-LAN (optional)" autocomplete="off">
+      <input name="psk" placeholder="Pre-Shared Key (Sony TVs)" autocomplete="off">
+      <button class="btn wide primary" type="submit">Add device</button>
+    </form>
+    <p class="note">Sony TV: Settings → Network → Home network → IP control → set Authentication to "Normal and Pre-Shared Key" and choose a PSK.</p>
+
+    <h3>Account</h3>
+    <button class="btn wide" id="logout">Sign out</button>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
   <script src="/static/app.js"></script>
 </body>

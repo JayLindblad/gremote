@@ -1,380 +1,464 @@
+'use strict';
 // gremote dashboard frontend (no build step).
 
+const ALL = 'all';
+const $ = (sel) => document.querySelector(sel);
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch { /* ignore */ } },
+};
+
 let devices = [];
+let selected = store.get('selectedDevice') || null;
+const statusCache = {};   // id -> last status dict
+const appsCache = {};     // id -> apps from the TV
 
-function $(sel) { return document.querySelector(sel); }
+// ------------------------------------------------------------------ api --
+class AuthError extends Error {}
 
-async function api(path, options) {
-  const res = await fetch(path, options || {});
-  if (res.status === 401) {
+async function api(method, url, body) {
+  const res = await fetch(url, {
+    method,
+    headers: body ? { 'Content-Type': 'application/json' } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (res.status === 401 && !url.startsWith('/api/auth/login')) {
     showLogin();
-    throw new Error("Not authenticated");
+    throw new AuthError('Not signed in');
   }
   let data = {};
-  try { data = await res.json(); } catch (e) { /* non-JSON */ }
-  if (!res.ok) {
-    throw new Error(data.detail || ("HTTP " + res.status));
-  }
+  try { data = await res.json(); } catch { /* empty */ }
+  if (!res.ok) throw new Error(data.detail || `Request failed (${res.status})`);
   return data;
 }
 
-// ---- auth -------------------------------------------------------------
+let toastTimer;
+function toast(msg, isError = false, ms = 3200) {
+  const el = $('#toast');
+  el.textContent = msg;
+  el.classList.toggle('error', isError);
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), ms);
+}
 
-async function checkSession() {
-  try {
-    await api("/api/auth/me");
-    showDashboard();
-    await loadDevices();
-  } catch (e) {
-    showLogin();
-  }
+function buzz() { if (navigator.vibrate) navigator.vibrate(8); }
+
+// ----------------------------------------------------------------- auth --
+function showLogin() {
+  $('#login').hidden = false;
+  $('#app').hidden = true;
+  if ($('#settings').open) $('#settings').close();
+}
+
+async function showApp() {
+  $('#login').hidden = true;
+  $('#app').hidden = false;
+  $('#login-error').textContent = '';
+  $('#password').value = '';
+  await loadTypes();
+  await loadDevices();
 }
 
 async function login(e) {
   e.preventDefault();
   try {
-    await api("/api/auth/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password: $("#password").value })
-    });
-    showDashboard();
-    await loadDevices();
+    await api('POST', '/api/auth/login', { password: $('#password').value });
+    await showApp();
   } catch (err) {
-    $("#login-error").textContent = err.message;
+    $('#login-error').textContent = err.message;
   }
 }
 
 async function logout() {
-  try { await api("/api/auth/logout", { method: "POST" }); } catch (e) {}
+  try { await api('POST', '/api/auth/logout'); } catch { /* ignore */ }
   showLogin();
 }
 
-function showLogin() {
-  $("#login").style.display = "flex";
-  $("#dashboard").style.display = "none";
-}
-
-function showDashboard() {
-  $("#login").style.display = "none";
-  $("#dashboard").style.display = "block";
-  $("#login-error").textContent = "";
-  $("#password").value = "";
-}
-
-// ---- devices ------------------------------------------------------------
-
+// -------------------------------------------------------------- devices --
 async function loadTypes() {
-  const data = await api("/api/devices/types");
-  const sel = $("#device-type");
-  sel.innerHTML = "";
-  data.types.forEach(function (t) {
-    const opt = document.createElement("option");
-    opt.value = t.type;
-    opt.textContent = t.label;
-    sel.appendChild(opt);
-  });
+  try {
+    const data = await api('GET', '/api/devices/types');
+    const sel = $('#deviceType');
+    sel.innerHTML = '';
+    data.types.forEach((t) => {
+      const o = document.createElement('option');
+      o.value = t.type;
+      o.textContent = t.label;
+      sel.appendChild(o);
+    });
+  } catch { /* shown after login */ }
 }
 
 async function loadDevices() {
-  const data = await api("/api/devices");
+  const data = await api('GET', '/api/devices');
   devices = data.devices;
-  renderDevices();
+  if (selected !== ALL && !devices.some((d) => d.id === selected)) selected = devices[0] ? devices[0].id : null;
+  renderTabs();
+  renderDeviceList();
+  renderRemote();
+  refreshStatus();
+  if (!devices.length) openSettings();
 }
 
-function deviceById(id) {
-  for (let i = 0; i < devices.length; i++) {
-    if (devices[i].id === id) return devices[i];
+const currentDevice = () => devices.find((d) => d.id === selected);
+const targets = () => (selected === ALL ? devices : devices.filter((d) => d.id === selected));
+
+function select(id) {
+  selected = id;
+  store.set('selectedDevice', id || '');
+  renderTabs();
+  renderRemote();
+  refreshStatus();
+}
+
+function dotClass(status) {
+  if (!status) return 'dot';
+  if (status.power === 'active') return 'dot on';
+  if (status.power === 'standby') return 'dot standby';
+  return 'dot off';
+}
+
+function renderTabs() {
+  const tabs = $('#tabs');
+  tabs.innerHTML = '';
+  const add = (id, label, status) => {
+    const b = document.createElement('button');
+    b.className = 'tab';
+    b.setAttribute('role', 'tab');
+    b.setAttribute('aria-selected', String(id === selected));
+    const dot = document.createElement('span');
+    dot.className = status === null ? '' : dotClass(status);
+    if (status !== null) b.appendChild(dot);
+    b.appendChild(document.createTextNode(label));
+    b.addEventListener('click', () => select(id));
+    tabs.appendChild(b);
+  };
+  devices.forEach((d) => add(d.id, d.name, statusCache[d.id] || undefined));
+  if (devices.length > 1) add(ALL, 'All', null);
+}
+
+function renderRemote() {
+  $('#remote').classList.toggle('disabled', !selected);
+  renderApps();
+}
+
+// --------------------------------------------------------------- status --
+async function refreshStatus() {
+  await Promise.all(devices.map(async (d) => {
+    try { statusCache[d.id] = (await api('GET', `/api/devices/${d.id}/status`)).status; }
+    catch (err) { if (err instanceof AuthError) return; statusCache[d.id] = null; }
+  }));
+  renderTabs();
+  renderStatusBar();
+}
+
+function renderStatusBar() {
+  const bar = $('#statusBar');
+  const d = currentDevice();
+  if (selected === ALL) { bar.textContent = `Controlling all ${devices.length} devices`; return; }
+  if (!d) { bar.textContent = 'No devices yet. Open settings to add one.'; return; }
+  const s = statusCache[d.id];
+  if (!s) { bar.textContent = `${d.host} · unreachable`; return; }
+  const parts = [d.host, `power: ${s.power}`];
+  if (s.volume !== null && s.volume !== undefined) {
+    parts.push(`volume ${s.volume}`);
+    $('#volSlider').value = s.volume;
+    $('#volOut').textContent = s.volume;
   }
-  return null;
+  if (s.mute) parts.push('muted');
+  bar.textContent = parts.join(' · ');
 }
 
-function renderDevices() {
-  const list = $("#device-list");
-  list.innerHTML = "";
-  if (!devices.length) {
-    list.innerHTML = "<p class='empty'>No devices yet. Add your first device above.</p>";
+// ------------------------------------------------------------- commands --
+let lastErrorAt = 0;
+
+/** Run an action on the selected device(s). */
+async function run(action, params, { quiet = false } = {}) {
+  const list = targets();
+  if (!list.length) { toast('Add a device first', true); openSettings(); return null; }
+  const results = await Promise.allSettled(list.map((d) =>
+    api('POST', `/api/devices/${d.id}/action`, { action, params: params || {} })));
+  const failed = results
+    .map((r, i) => (r.status === 'rejected' && !(r.reason instanceof AuthError) ? `${list[i].name}: ${r.reason.message}` : null))
+    .filter(Boolean);
+  if (failed.length && (!quiet || Date.now() - lastErrorAt > 2500)) toast(failed.join('\n'), true, 5000);
+  if (failed.length) lastErrorAt = Date.now();
+  if (['toggle_power', 'power_on', 'power_off', 'toggle_mute', 'set_volume'].includes(action)) {
+    setTimeout(refreshStatus, 1500);
+  }
+  const ok = results.find((r) => r.status === 'fulfilled');
+  return ok ? ok.value.result : null;
+}
+
+const ircc = (code, opts) => run('ircc', { code }, opts);
+
+async function powerOn() {
+  const r = await run('power_on', null, { quiet: true });
+  if (r === null) run('wake');   // TV in deep standby: fall back to Wake-on-LAN
+}
+
+// ------------------------------------------------ tap / hold detection --
+// Nothing is sent on touch-down; a tap fires on release. Moving the finger
+// (scrolling) cancels the press. Holding still starts a repeat.
+const MOVE_SLOP = 10;
+const HOLD_DELAY = 450;
+const REPEAT_EVERY = 160;
+
+function onTap(el, fn, { repeat } = {}) {
+  let g = null;
+  const reset = () => {
+    if (!g) return;
+    clearTimeout(g.holdTimer);
+    clearInterval(g.repeatTimer);
+    el.classList.remove('pressed');
+    g = null;
+  };
+  el.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    reset();
+    g = { x: e.clientX, y: e.clientY, held: false };
+    el.classList.add('pressed');
+    if (repeat) {
+      g.holdTimer = setTimeout(() => {
+        if (!g) return;
+        g.held = true;
+        buzz();
+        repeat();
+        g.repeatTimer = setInterval(repeat, REPEAT_EVERY);
+      }, HOLD_DELAY);
+    }
+  });
+  el.addEventListener('pointermove', (e) => {
+    if (g && !g.held && Math.hypot(e.clientX - g.x, e.clientY - g.y) > MOVE_SLOP) reset();
+  });
+  el.addEventListener('pointerup', () => {
+    if (!g) return;
+    const wasHeld = g.held;
+    reset();
+    if (!wasHeld) { buzz(); fn(); }
+  });
+  ['pointercancel', 'pointerleave'].forEach((ev) => el.addEventListener(ev, reset));
+  el.addEventListener('contextmenu', (e) => e.preventDefault());
+}
+
+function wireRemote() {
+  document.querySelectorAll('#remote [data-ircc]').forEach((el) => {
+    const code = el.dataset.ircc;
+    onTap(el, () => ircc(code), el.hasAttribute('data-repeat') ? { repeat: () => ircc(code, { quiet: true }) } : {});
+  });
+  document.querySelectorAll('#remote [data-action]').forEach((el) => {
+    const action = el.dataset.action;
+    onTap(el, () => (action === 'power_on' ? powerOn() : run(action)));
+  });
+  document.querySelectorAll('#remote [data-input]').forEach((el) => {
+    onTap(el, () => run('set_input', { input: el.dataset.input }));
+  });
+
+  let volTimer;
+  $('#volSlider').addEventListener('input', (e) => {
+    $('#volOut').textContent = e.target.value;
+    clearTimeout(volTimer);
+    volTimer = setTimeout(() => run('set_volume', { volume: Number(e.target.value) }), 250);
+  });
+
+  $('#keyForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const v = $('#keyInput').value.trim();
+    if (v) { ircc(v); $('#keyInput').value = ''; }
+  });
+
+  $('#loadApps').addEventListener('click', loadApps);
+}
+
+// ----------------------------------------------------------------- apps --
+function renderApps() {
+  const box = $('#apps');
+  box.innerHTML = '';
+  const d = currentDevice();
+  const apps = (d && appsCache[d.id]) || [];
+  if (!apps.length) {
+    const p = document.createElement('p');
+    p.className = 'empty';
+    p.textContent = selected === ALL ? 'Select a single device to see its apps.' : 'No apps loaded yet.';
+    box.appendChild(p);
     return;
   }
-  devices.forEach(function (d) {
-    const card = buildCard(d);
+  apps.forEach((app) => {
+    if (!app.uri) return;
+    const b = document.createElement('button');
+    b.className = 'app';
+    b.textContent = app.title || app.uri;
+    onTap(b, () => run('launch_app', { uri: app.uri }));
+    box.appendChild(b);
+  });
+}
+
+async function loadApps() {
+  const d = currentDevice();
+  if (!d) { toast('Select a single device first', true); return; }
+  try {
+    const data = await api('POST', `/api/devices/${d.id}/action`, { action: 'apps' });
+    appsCache[d.id] = (data.result && data.result.apps) || [];
+    renderApps();
+    if (!appsCache[d.id].length) toast('The TV returned no apps', true);
+  } catch (err) {
+    if (!(err instanceof AuthError)) toast(err.message, true);
+  }
+}
+
+// ------------------------------------------------------------- settings --
+function openSettings() { if (!$('#settings').open) $('#settings').showModal(); }
+
+function renderDeviceList() {
+  const list = $('#deviceList');
+  list.innerHTML = '';
+  if (!devices.length) {
+    list.innerHTML = '<p class="empty">No devices yet.</p>';
+    return;
+  }
+  devices.forEach((d) => {
+    const card = document.createElement('div');
+    card.className = 'tv-card';
+    const head = document.createElement('div');
+    head.className = 'head';
+    const name = document.createElement('strong');
+    name.textContent = d.name;
+    const badge = document.createElement('span');
+    badge.className = 'badge';
+    badge.textContent = d.type;
+    head.append(name, badge);
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    meta.textContent = d.host + (d.mac ? ` · ${d.mac}` : '');
+    const actions = document.createElement('div');
+    actions.className = 'actions';
+    const del = document.createElement('button');
+    del.className = 'btn small danger';
+    del.type = 'button';
+    del.textContent = 'Delete';
+    del.addEventListener('click', async () => {
+      if (!confirm(`Delete ${d.name}?`)) return;
+      try { await api('DELETE', `/api/devices/${d.id}`); await loadDevices(); }
+      catch (err) { toast(err.message, true); }
+    });
+    actions.appendChild(del);
+    card.append(head, meta, actions);
     list.appendChild(card);
-    refreshStatus(d, card);
-    if (d.type === "sony_bravia") {
-      loadApps(d, card.querySelector(".app-select"));
-    }
   });
-}
-
-function buildCard(d) {
-  const card = document.createElement("div");
-  card.className = "card";
-  card.id = "card-" + d.id;
-
-  const head = document.createElement("div");
-  head.className = "card-head";
-  const name = document.createElement("h3");
-  name.textContent = d.name;
-  const sub = document.createElement("div");
-  sub.className = "sub";
-  sub.textContent = d.type + " · " + d.host;
-  head.appendChild(name);
-  head.appendChild(sub);
-
-  const status = document.createElement("div");
-  status.className = "status";
-  status.textContent = "status: …";
-
-  const controls = document.createElement("div");
-  controls.className = "controls";
-  controls.appendChild(btn("Wake", function () { run(d.id, "wake"); }));
-  controls.appendChild(btn("Power", function () { run(d.id, "toggle_power"); }));
-
-  if (d.type === "sony_bravia") {
-    controls.appendChild(sonyControls(d));
-  }
-
-  const del = btn("Delete", function () { remove(d.id); }, "danger");
-  del.style.marginLeft = "auto";
-  controls.appendChild(del);
-
-  card.appendChild(head);
-  card.appendChild(status);
-  card.appendChild(controls);
-  return card;
-}
-
-function sonyControls(d) {
-  const wrap = document.createElement("div");
-  wrap.className = "sony-controls";
-
-  wrap.appendChild(btn("Mute", function () { run(d.id, "toggle_mute"); }));
-
-  // volume slider
-  const vol = document.createElement("div");
-  vol.className = "vol-wrap";
-  const slider = document.createElement("input");
-  slider.type = "range";
-  slider.min = "0";
-  slider.max = "100";
-  slider.value = "0";
-  slider.className = "vol-slider";
-  const out = document.createElement("output");
-  out.textContent = "—";
-  slider.addEventListener("input", function () { out.textContent = slider.value; });
-  slider.addEventListener("change", function () {
-    run(d.id, "set_volume", { volume: Number(slider.value) });
-  });
-  vol.appendChild(slider);
-  vol.appendChild(out);
-  wrap.appendChild(vol);
-
-  // input select
-  const inputSel = document.createElement("select");
-  inputSel.className = "input-select";
-  const inputs = [["tv", "TV"], ["hdmi1", "HDMI 1"], ["hdmi2", "HDMI 2"],
-                  ["hdmi3", "HDMI 3"], ["hdmi4", "HDMI 4"]];
-  inputs.forEach(function (pair) {
-    const o = document.createElement("option");
-    o.value = pair[0];
-    o.textContent = pair[1];
-    inputSel.appendChild(o);
-  });
-  inputSel.addEventListener("change", function () {
-    run(d.id, "set_input", { input: inputSel.value });
-  });
-  wrap.appendChild(inputSel);
-
-  // apps select + launch
-  const appSel = document.createElement("select");
-  appSel.className = "app-select";
-  const opt = document.createElement("option");
-  opt.value = "";
-  opt.textContent = "Apps…";
-  appSel.appendChild(opt);
-  wrap.appendChild(appSel);
-  wrap.appendChild(btn("Launch", function () {
-    if (appSel.value) run(d.id, "launch_app", { uri: appSel.value });
-  }));
-
-  return wrap;
-}
-
-function btn(label, onClick, cls) {
-  const b = document.createElement("button");
-  b.type = "button";
-  b.textContent = label;
-  b.className = cls || "";
-  b.addEventListener("click", onClick);
-  return b;
-}
-
-async function refreshStatus(d, card) {
-  const statusEl = card.querySelector(".status");
-  statusEl.textContent = "status: …";
-  try {
-    const data = await api("/api/devices/" + d.id + "/status");
-    statusEl.textContent = formatStatus(data.status);
-    const slider = card.querySelector(".vol-slider");
-    const v = data.status && data.status.volume;
-    if (slider && v !== null && v !== undefined) {
-      slider.value = v;
-      const out = slider.parentElement.querySelector("output");
-      if (out) out.textContent = v;
-    }
-  } catch (err) {
-    statusEl.textContent = "status: error (" + err.message + ")";
-  }
-}
-
-function formatStatus(s) {
-  if (!s) return "status: unknown";
-  const parts = [];
-  if (s.power) parts.push("power: " + s.power);
-  if (s.volume !== undefined && s.volume !== null) parts.push("volume: " + s.volume);
-  if (s.mute) parts.push("muted");
-  return "status: " + (parts.join(" · ") || "unknown");
-}
-
-async function loadApps(d, selectEl) {
-  if (!selectEl) return;
-  try {
-    const data = await api("/api/devices/" + d.id + "/action", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "apps" })
-    });
-    const apps = (data.result && data.result.apps) || [];
-    selectEl.innerHTML = "";
-    const none = document.createElement("option");
-    none.value = "";
-    none.textContent = "Launch app…";
-    selectEl.appendChild(none);
-    apps.forEach(function (app) {
-      if (!app.uri) return;
-      const o = document.createElement("option");
-      o.value = app.uri;
-      o.textContent = app.title || app.uri;
-      selectEl.appendChild(o);
-    });
-  } catch (err) {
-    const first = selectEl.querySelector("option");
-    if (first) first.textContent = "Apps unavailable";
-  }
-}
-
-async function run(id, name, params) {
-  try {
-    await api("/api/devices/" + id + "/action", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: name, params: params || {} })
-    });
-  } catch (err) {
-    alert(err.message);
-  }
-  const d = deviceById(id);
-  const card = $("#card-" + id);
-  if (d && card) refreshStatus(d, card);
-}
-
-async function remove(id) {
-  if (!confirm("Delete this device?")) return;
-  try {
-    await api("/api/devices/" + id, { method: "DELETE" });
-    await loadDevices();
-  } catch (err) {
-    alert(err.message);
-  }
 }
 
 async function addDevice(e) {
   e.preventDefault();
+  const f = new FormData(e.target);
   const body = {
-    name: $("#device-name").value,
-    type: $("#device-type").value,
-    host: $("#device-host").value,
-    mac: $("#device-mac").value || null
+    name: f.get('name'),
+    type: f.get('type'),
+    host: f.get('host'),
+    mac: f.get('mac') || null,
   };
-  const psk = $("#device-psk").value;
-  if (psk) body.config = { psk: psk };
+  if (f.get('psk')) body.config = { psk: f.get('psk') };
   try {
-    await api("/api/devices", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body)
-    });
-    $("#device-name").value = "";
-    $("#device-host").value = "";
-    $("#device-mac").value = "";
-    $("#device-psk").value = "";
+    const { device } = await api('POST', '/api/devices', body);
+    e.target.reset();
+    $('#discovered').innerHTML = '';
+    selected = device.id;
+    store.set('selectedDevice', device.id);
     await loadDevices();
+    toast(`Added ${device.name}`);
   } catch (err) {
-    alert(err.message);
+    toast(err.message, true);
   }
 }
-
-// ---- discovery -----------------------------------------------------------
 
 async function scanNetwork() {
-  const btn = $("#scan-network");
-  const results = $("#discovery-results");
+  const btn = $('#scanBtn');
+  const out = $('#discovered');
   btn.disabled = true;
-  btn.textContent = "Scanning…";
-  results.innerHTML = "<p class='muted'>Scanning the network for Sony TVs…</p>";
+  btn.textContent = 'Scanning…';
+  out.innerHTML = '';
   try {
-    const data = await api("/api/discovery/scan", { method: "POST" });
-    renderDiscovery(data.devices || []);
+    const { devices: found } = await api('POST', '/api/discovery/scan');
+    if (!found.length) {
+      out.innerHTML = '<p class="empty">No Sony TVs found. Check IP control is enabled and the server is on the same network, then try again.</p>';
+    }
+    found.forEach((dev) => {
+      const card = document.createElement('div');
+      card.className = 'tv-card';
+      const head = document.createElement('div');
+      head.className = 'head';
+      const name = document.createElement('strong');
+      name.textContent = dev.friendly_name || dev.host;
+      const use = document.createElement('button');
+      use.className = 'btn small primary';
+      use.type = 'button';
+      use.textContent = 'Use';
+      use.addEventListener('click', () => {
+        const f = $('#addForm');
+        f.elements.name.value = dev.friendly_name || `TV ${dev.host}`;
+        f.elements.type.value = 'sony_bravia';
+        f.elements.host.value = dev.host;
+        f.elements.mac.value = '';
+        f.elements.psk.value = '';
+        f.elements.psk.focus();
+        toast('Filled in. Enter the PSK (and MAC if known), then Add.');
+      });
+      head.append(name, use);
+      const meta = document.createElement('div');
+      meta.className = 'meta';
+      meta.textContent = dev.host + (dev.model ? ` · ${dev.model}` : '');
+      card.append(head, meta);
+      out.appendChild(card);
+    });
   } catch (err) {
-    results.innerHTML = "<p class='error'>Scan failed: " + err.message + "</p>";
+    if (!(err instanceof AuthError)) toast(`Scan failed: ${err.message}`, true);
   } finally {
     btn.disabled = false;
-    btn.textContent = "Scan network";
+    btn.textContent = 'Scan network';
   }
 }
 
-function renderDiscovery(devs) {
-  const results = $("#discovery-results");
-  results.innerHTML = "";
-  if (!devs.length) {
-    results.innerHTML = "<p class='muted'>No Sony TVs found. Check the TV is on the same network with IP control enabled, then scan again.</p>";
-    return;
-  }
-  const list = document.createElement("div");
-  list.className = "discovery-list";
-  devs.forEach(function (dev) {
-    const row = document.createElement("div");
-    row.className = "discovery-row";
-    const label = document.createElement("span");
-    label.className = "discovery-label";
-    label.textContent = (dev.friendly_name || dev.host) + " — " + dev.host;
-    if (dev.model) label.textContent += " (" + dev.model + ")";
-    row.appendChild(label);
-    row.appendChild(btn("Use", function () { useDiscovery(dev); }));
-    list.appendChild(row);
+// ------------------------------------------------------------- keyboard --
+const KEYMAP = {
+  ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right',
+  Enter: 'confirm', Backspace: 'back', Escape: 'back', h: 'home', H: 'home',
+  '+': 'volume_up', '=': 'volume_up', '-': 'volume_down', _: 'volume_down',
+  PageUp: 'channel_up', PageDown: 'channel_down', s: 'input', S: 'input', ' ': 'play',
+};
+
+function wireKeyboard() {
+  let playing = false;
+  document.addEventListener('keydown', (e) => {
+    if ($('#app').hidden || $('#settings').open || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (/^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement.tagName)) return;
+    if (e.key === 'm' || e.key === 'M') { e.preventDefault(); run('toggle_mute'); return; }
+    if (e.key === 'p' || e.key === 'P') { e.preventDefault(); run('toggle_power'); return; }
+    if (e.key === ' ') {
+      e.preventDefault();
+      if (!e.repeat) { ircc(playing ? 'pause' : 'play'); playing = !playing; }
+      return;
+    }
+    const code = KEYMAP[e.key];
+    if (!code) return;
+    e.preventDefault();
+    ircc(code, { quiet: e.repeat });
   });
-  results.appendChild(list);
 }
 
-function useDiscovery(dev) {
-  $("#device-name").value = dev.friendly_name || ("TV " + dev.host);
-  $("#device-type").value = "sony_bravia";
-  $("#device-host").value = dev.host;
-  $("#device-mac").value = "";
-  $("#device-psk").value = "";
-  $("#discovery-results").innerHTML =
-    "<p class='muted'>Filled in " + dev.host + ". Enter the PSK (and MAC if you know it), then click Add.</p>";
-  $("#device-psk").focus();
-}
+// ----------------------------------------------------------------- init --
+document.addEventListener('DOMContentLoaded', async () => {
+  $('#login-form').addEventListener('submit', login);
+  $('#logout').addEventListener('click', logout);
+  $('#addForm').addEventListener('submit', addDevice);
+  $('#scanBtn').addEventListener('click', scanNetwork);
+  $('#openSettings').addEventListener('click', openSettings);
+  $('#closeSettings').addEventListener('click', () => $('#settings').close());
+  wireRemote();
+  wireKeyboard();
+  setInterval(() => { if (!$('#app').hidden && !document.hidden) refreshStatus(); }, 20000);
 
-// ---- wire up ------------------------------------------------------------
-
-document.addEventListener("DOMContentLoaded", function () {
-  $("#login-form").addEventListener("submit", login);
-  $("#logout").addEventListener("click", logout);
-  $("#add-form").addEventListener("submit", addDevice);
-  $("#refresh-all").addEventListener("click", function () { loadDevices(); });
-  $("#scan-network").addEventListener("click", scanNetwork);
-  loadTypes();
-  checkSession();
+  try {
+    await api('GET', '/api/auth/me');
+    await showApp();
+  } catch { showLogin(); }
 });

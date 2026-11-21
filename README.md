@@ -1,61 +1,164 @@
 # gremote
 
-A self-hosted dashboard for remotely troubleshooting IP devices on a home network
-(Sony TVs, and more later), designed to run in a Proxmox LXC container on a small
-always-on box and be reached over Tailscale.
+A self-hosted web remote for IP-controlled devices on your home network (Sony BRAVIA TVs today, more later).
+Run it on any always-on machine (Proxmox LXC, Pi, NAS, PC), reach it from your phone or computer, and
+keep it private by putting it behind [Tailscale](https://tailscale.com).
 
-## What it does
+## Features
 
-- Serves a small web dashboard (FastAPI + vanilla JS frontend).
-- Keeps a registry of IP devices in SQLite.
-- Talks to Sony BRAVIA TVs via [pybravia](https://github.com/Drafteed/pybravia)
-  (REST API + Wake-on-LAN + IRCC) — the same library Home Assistant's
-  `bravia_tv` integration uses.
-- Requires a login (simple password session) before anything is reachable.
+- **Multiple devices**: switch between them with tabs, or pick **All** to send a command to every device at once
+- **Auto-discovery** of Sony TVs on the network, or add a device by IP address
+- Full remote: power, D-pad, back/home/options, volume/mute, channels, playback, number pad, colour keys, and any IRCC command name
+- **Power on** with the TV's API or Wake-on-LAN
+- **Volume slider, input switching** (TV, HDMI 1-4) and an **app launcher** loaded from the TV
+- Hold a button to repeat it (volume, arrows), keyboard shortcuts on desktop, works as a home-screen app on phones
+- Live power status on every tab
+- Password login; settings and data survive updates
 
-## Architecture
+## Setup (local)
 
-    Browser (you, over Tailscale)
-        |
-        v
-    gremote (LXC container) -- FastAPI app
-        |  \_________________
-        |                    \
-        v                     v
-    SQLite registry      Sony TV REST API + WOL
-    (device list)        (and future device drivers)
+Requires Python 3.11 or newer.
 
-## Quickstart (dev)
+```bash
+python -m venv .venv
+```
 
-    python -m venv .venv
-    .venv/bin/pip install -e ".[dev]"      # Windows: .venv\Scripts\pip install -e ".[dev]"
-    cp .env.example .env                    # then edit secrets
-    .venv/bin/uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+```bash
+.venv/bin/pip install -e .          # Windows: .venv\Scripts\pip install -e .
+```
 
-Open http://127.0.0.1:8000 and log in with the password you set in .env.
+```bash
+cp .env.example .env                # then set GREMOTE_SECRET_KEY and GREMOTE_ADMIN_PASSWORD
+```
 
-## Deploying to Proxmox
+```bash
+.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
 
-Run on the Proxmox host shell (as root) to create the LXC, install the app and
-generate your secrets:
+Open `http://localhost:8000` and sign in with the password from `.env`.
 
-    bash -c "$(curl -fsSL https://raw.githubusercontent.com/JayLindblad/gremote/main/deploy/create-lxc.sh)"
+### First-time TV setup (Sony)
 
-Defaults (CTID, 1 core, 512 MB, 4 GB disk, DHCP) can be overridden with env vars,
-e.g. `CTID=112 STORAGE=local-zfs IP=192.168.1.50/24 GATEWAY=192.168.1.1 bash -c "..."`.
+On the TV, enable IP control so gremote can talk to it:
 
-**Updating** after you push changes to GitHub, either inside the container:
+1. **Settings → Network → Home network → IP control**: set *Authentication* to **Normal and Pre-Shared Key** and choose a PSK.
+2. **Remote start = On** (needed for Wake-on-LAN from standby).
+3. Give the TV a **fixed IP (DHCP reservation)** in your router.
 
-    update
+Then in gremote: ⚙ → **Scan network** (or add by IP) → enter the PSK, and the MAC if you want Wake-on-LAN.
 
-or from the Proxmox host:
+## Configuration
 
-    bash -c "$(curl -fsSL https://raw.githubusercontent.com/JayLindblad/gremote/main/deploy/create-lxc.sh)" -- update
+Set these as environment variables, or in `.env` / `/etc/gremote.env`:
 
-Updates fast-forward `/opt/gremote`, refresh dependencies and restart the
-service; `.env` and the database are left untouched.
+| Variable | Default | Purpose |
+|---|---|---|
+| `GREMOTE_SECRET_KEY` | `change-me` | Signs session cookies. Use a long random string |
+| `GREMOTE_ADMIN_PASSWORD` | `change-me` | Dashboard password |
+| `GREMOTE_DATABASE_PATH` | `gremote.db` | Where devices and PSKs are stored |
+| `GREMOTE_SESSION_TTL_SECONDS` | `604800` | How long a login lasts (7 days) |
 
-See deploy/lxc-setup.md for the manual walkthrough and Tailscale details.
+> gremote logs a warning at startup while either secret is still `change-me`.
+> Don't expose the port to the internet. Use Tailscale.
+
+## Proxmox: LXC container (recommended)
+
+One command, run in the Proxmox host shell as root, creates a small Debian LXC (512 MB RAM, 4 GB disk) with gremote
+installed as a service. The container starts when Proxmox boots, and a secret key and dashboard password are generated for you.
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/JayLindblad/gremote/main/deploy/proxmox-lxc.sh)"
+```
+
+Or from a clone of the repo: `bash deploy/proxmox-lxc.sh`. It prints the address when it finishes,
+e.g. `http://192.168.1.60:8000`.
+
+Settings are passed as environment variables in front of the command:
+
+```bash
+IP=192.168.1.60/24 GATEWAY=192.168.1.1 PORT=80 bash deploy/proxmox-lxc.sh
+```
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `CTID` | next free ID | Container ID |
+| `CT_HOSTNAME` | `gremote` | Container hostname |
+| `IP` / `GATEWAY` | `dhcp` | Static IP in CIDR form (e.g. `192.168.1.60/24`) plus gateway |
+| `BRIDGE` / `VLAN` | `vmbr0` / none | Must reach the same network/VLAN as your devices |
+| `STORAGE` | `local-lvm` (or first available) | Container disk storage |
+| `PORT` | `8000` | Use `80` for a URL without a port |
+| `GREMOTE_PASSWORD` | generated | Dashboard password |
+| `MEMORY` / `DISK` / `CORES` | `512` / `4` / `1` | Resources |
+| `INSTALL_TAILSCALE` | `1` | Install Tailscale in the container (not logged in) |
+
+Afterwards, authorise Tailscale once: `pct exec <CTID> -- tailscale up`.
+
+To **update** later, run `update` inside the container, or from the Proxmox host:
+
+```bash
+bash deploy/proxmox-lxc.sh update <CTID>
+```
+
+Updating pulls the latest code from GitHub, refreshes dependencies and restarts the service. Your devices, PSKs,
+settings and Tailscale login are kept; Tailscale itself is never touched.
+
+Inside the container: settings live in `/etc/gremote.env` (run `systemctl restart gremote` after editing),
+logs via `journalctl -u gremote -f`, and data in `/var/lib/gremote/`.
+
+> The container must be on the same LAN/VLAN as the devices. Discovery uses multicast and Wake-on-LAN uses broadcast,
+> and neither crosses subnets.
+
+**Already have a Debian/Ubuntu LXC or VM?** Run `bash deploy/install.sh` as root. It sets up the same service
+(without Tailscale).
+
+## Docker
+
+```bash
+cp .env.example .env     # set your secrets
+docker compose up -d --build
+```
+
+This uses **host networking**, which discovery and Wake-on-LAN need. Data is kept in the `gremote-data` volume.
+Docker Desktop on Mac/Windows doesn't support host networking properly, so scanning and Wake-on-LAN won't work
+there. Add devices by IP instead, or run it on a Linux machine.
+
+## Keyboard shortcuts (desktop)
+
+Arrows · Enter = OK · Backspace/Esc = Back · H = Home · +/− = volume · M = mute · PgUp/PgDn = channel · S = Input · P = power · Space = play/pause
+
+## Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| Scan finds nothing | Add the TV by IP. Discovery needs the server and TV on the same subnet. |
+| "Authentication failed" | The PSK doesn't match. Re-check it under the TV's IP control settings. |
+| Power On does nothing | Add the TV's *wired* MAC, and turn on *Remote start*. Use **Wake** for Wake-on-LAN. |
+| Status shows "unreachable" | The TV is in deep standby or the IP changed. Use a DHCP reservation. |
+| Apps list is empty | Some models don't expose it. Use Home, or send an IRCC name such as `Netflix`. |
+| Some buttons do nothing | Not every model supports every IRCC command. |
+
+## API
+
+All endpoints are JSON and need a session cookie from `POST /api/auth/login`.
+
+```
+GET    /api/devices                       list devices
+GET    /api/devices/types                 supported device types
+POST   /api/devices   {name,type,host,mac?,config?}   add a device
+PUT    /api/devices/:id                   update a device
+DELETE /api/devices/:id
+GET    /api/devices/:id/status            power, volume, mute
+POST   /api/devices/:id/action {action, params?}
+POST   /api/discovery/scan                scan for Sony TVs
+```
+
+Actions: `power_on`, `power_off`, `toggle_power`, `wake`, `volume_up`, `volume_down`, `set_volume`, `toggle_mute`,
+`set_input`, `apps`, `launch_app`, `ircc`, `playing`, `system_info`. For example:
+
+```bash
+curl -b cookies -X POST localhost:8000/api/devices/<id>/action \
+  -H 'Content-Type: application/json' -d '{"action":"ircc","params":{"code":"home"}}'
+```
 
 ## License
 

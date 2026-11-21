@@ -1,0 +1,12 @@
+services:
+  gremote:
+    build: .
+    restart: unless-stopped
+    # Host networking is needed for device discovery and Wake-on-LAN.
+    network_mode: host
+    env_file: .env
+    volumes:
+      - gremote-data:/data
+
+volumes:
+  gremote-data:
