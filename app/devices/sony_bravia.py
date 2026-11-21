@@ -88,7 +88,7 @@ class SonyBravia(DeviceDriver):
         except BraviaAuthError as exc:
             raise DeviceError("Authentication failed — check the PSK") from exc
         except BraviaError as exc:
-            raise DeviceError(str(exc)) from exc
+            raise DeviceError(f"{self.host}: {_chain(exc)}") from exc
         finally:
             await client.disconnect()
 
@@ -253,7 +253,21 @@ def normalize_mac(value) -> str | None:
     return ":".join(digits[i:i + 2] for i in range(0, 12, 2))
 
 
+def _chain(exc: BaseException) -> str:
+    """Describe an exception and everything that caused it, e.g.
+    "BraviaConnectionError <- ClientConnectorError: Cannot connect to host ..."."""
+    parts: list[str] = []
+    seen: set[int] = set()
+    cur: BaseException | None = exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        text = str(cur).strip()
+        parts.append(f"{type(cur).__name__}: {text}" if text else type(cur).__name__)
+        cur = cur.__cause__ or cur.__context__
+    return " <- ".join(parts)
+
+
 def _reason(exc: BaseException) -> str:
     """Error text plus the underlying library exception, for the debug log."""
     cause = exc.__cause__
-    return f"{exc} ({type(cause).__name__}: {cause})" if cause else str(exc)
+    return f"{exc} ({_chain(cause)})" if cause else str(exc)

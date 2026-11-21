@@ -11,11 +11,17 @@ replies, and enrich each with a best-effort fetch of its LOCATION XML.
 """
 
 import asyncio
+import ipaddress
 import re
 import socket
 import time
 import urllib.request
 import urllib.error
+from urllib.parse import urlparse
+
+import aiohttp
+
+from .config import settings
 
 MCAST_GRP = "239.255.255.250"
 MCAST_PORT = 1900
@@ -103,15 +109,79 @@ async def _enrich(location: str) -> dict:
     return out
 
 
-async def discover_sony_tvs(timeout: float = 4.0) -> list[dict]:
+SWEEP_PAYLOAD = {"method": "getInterfaceInformation", "id": 1, "params": [], "version": "1.0"}
+SWEEP_CONCURRENCY = 128
+MAX_SWEEP_HOSTS = 1024   # a /22
+
+
+def _local_ip() -> str | None:
+    """The IP this machine uses to reach the LAN (no packets are sent)."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.connect(("192.0.2.1", 9))
+        return sock.getsockname()[0]
+    except OSError:
+        return None
+    finally:
+        sock.close()
+
+
+def _sweep_hosts() -> list[str]:
+    """Addresses to probe: GREMOTE_SCAN_SUBNET (comma-separated CIDRs) or our own /24."""
+    own = _local_ip()
+    cidrs = [c.strip() for c in settings.scan_subnet.split(",") if c.strip()]
+    if not cidrs and own:
+        cidrs = [f"{own}/24"]
+    hosts: list[str] = []
+    for cidr in cidrs:
+        try:
+            net = ipaddress.ip_network(cidr, strict=False)
+        except ValueError:
+            continue
+        hosts.extend(str(h) for h in net.hosts() if str(h) != own)
+    return hosts[:MAX_SWEEP_HOSTS]
+
+
+async def _probe(session: aiohttp.ClientSession, sem: asyncio.Semaphore, host: str) -> dict | None:
+    """Sony's getInterfaceInformation is public (no PSK) and answers on port 80."""
+    async with sem:
+        try:
+            async with session.post(f"http://{host}/sony/system", json=SWEEP_PAYLOAD,
+                                    allow_redirects=False) as resp:
+                if resp.status != 200:
+                    return None   # e.g. an Aruba AP's 302 captive-portal page
+                data = await resp.json(content_type=None)
+        except (aiohttp.ClientError, asyncio.TimeoutError, OSError, ValueError):
+            return None
+    result = data.get("result") if isinstance(data, dict) else None
+    info = result[0] if isinstance(result, list) and result and isinstance(result[0], dict) else None
+    if not info or not (info.get("modelName") or info.get("productName")):
+        return None
+    return {"host": host, "model": info.get("modelName"), "product": info.get("productName")}
+
+
+async def _sweep() -> list[dict]:
+    hosts = _sweep_hosts()
+    if not hosts:
+        return []
+    sem = asyncio.Semaphore(SWEEP_CONCURRENCY)
+    timeout = aiohttp.ClientTimeout(total=2.0, connect=1.0)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        found = await asyncio.gather(*(_probe(session, sem, h) for h in hosts))
+    return [f for f in found if f]
+
+
+async def _ssdp(timeout: float) -> list[dict]:
     raw = await asyncio.to_thread(_scan, SONY_ST, timeout)
     results: list[dict] = []
-    seen_hosts: set[str] = set()
+    seen: set[str] = set()
     for item in raw:
-        host = item["host"]
-        if host in seen_hosts:
+        # The datagram's source can be an access point answering on the TV's
+        # behalf (Aruba AirGroup etc.); the LOCATION URL carries the TV's own IP.
+        host = urlparse(item["location"]).hostname or item["host"]
+        if host in seen:
             continue
-        seen_hosts.add(host)
+        seen.add(host)
         info = await _enrich(item["location"])
         results.append({
             "host": host,
@@ -121,5 +191,40 @@ async def discover_sony_tvs(timeout: float = 4.0) -> list[dict]:
             "udn": info.get("UDN"),
             "st": item["st"],
             "location": item["location"],
+            "found_by": ["ssdp"],
         })
     return results
+
+
+async def discover_sony_tvs(timeout: float = 4.0) -> list[dict]:
+    """SSDP (multicast) plus a unicast subnet sweep, merged by IP.
+
+    The sweep finds TVs when an access point filters multicast on Wi-Fi.
+    """
+    ssdp_results, sweep_results = await asyncio.gather(
+        _ssdp(timeout), _sweep(), return_exceptions=True)
+    merged: dict[str, dict] = {}
+    if not isinstance(ssdp_results, BaseException):
+        for d in ssdp_results:
+            merged[d["host"]] = d
+    if not isinstance(sweep_results, BaseException):
+        for s in sweep_results:
+            existing = merged.get(s["host"])
+            if existing:
+                existing["found_by"].append("sweep")
+                existing["model"] = existing.get("model") or s["model"]
+            else:
+                merged[s["host"]] = {
+                    "host": s["host"],
+                    "friendly_name": s["model"] or s["product"] or "Sony TV",
+                    "manufacturer": "Sony",
+                    "model": s["model"],
+                    "udn": None,
+                    "st": "",
+                    "location": None,
+                    "found_by": ["sweep"],
+                }
+    if isinstance(ssdp_results, BaseException) and isinstance(sweep_results, BaseException):
+        raise ssdp_results
+    return sorted(merged.values(), key=lambda d: tuple(int(p) if p.isdigit() else 0
+                                                       for p in d["host"].split(".")))

@@ -15,6 +15,9 @@ class Settings(BaseSettings):
     session_ttl_seconds: int = 60 * 60 * 24 * 7
     database_path: str = "gremote.db"
     app_title: str = "gremote"
+    # Extra/override subnets for the unicast TV sweep, e.g. "192.168.1.0/24,192.168.2.0/24".
+    # Empty = the /24 around this machine.
+    scan_subnet: str = ""
 
 
 settings = Settings()

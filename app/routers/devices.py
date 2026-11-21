@@ -44,7 +44,13 @@ def _require_device(device_id: str) -> dict:
 
 def _cause(exc: BaseException) -> str | None:
     cause = exc.__cause__
-    return f"{type(cause).__name__}: {cause}" if cause else None
+    if not cause:
+        return None
+    parts = []
+    while cause is not None and len(parts) < 5:
+        parts.append(f"{type(cause).__name__}: {cause}".rstrip(": "))
+        cause = cause.__cause__ or cause.__context__
+    return " <- ".join(parts)
 
 
 async def _run(device: dict, action: str, params: dict | None, call):

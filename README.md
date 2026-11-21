@@ -7,7 +7,7 @@ keep it private by putting it behind [Tailscale](https://tailscale.com).
 ## Features
 
 - **Multiple devices**: switch between them with tabs, or pick **All** to send a command to every device at once
-- **Auto-discovery** of Sony TVs on the network, or add a device by IP address
+- **Auto-discovery** of Sony TVs (SSDP plus a direct subnet sweep that works on Wi-Fi networks filtering multicast), or add a device by IP address
 - Full remote: power, D-pad, back/home/options, volume/mute, channels, playback, number pad, colour keys, and any IRCC command name
 - **Power on** with the TV's API or Wake-on-LAN
 - **Volume slider, input switching** (TV, HDMI 1-4) and an **app launcher** loaded from the TV
@@ -59,6 +59,7 @@ Set these as environment variables, or in `.env` / `/etc/gremote.env`:
 | `GREMOTE_ADMIN_PASSWORD` | `change-me` | Dashboard password |
 | `GREMOTE_DATABASE_PATH` | `gremote.db` | Where devices and PSKs are stored |
 | `GREMOTE_SESSION_TTL_SECONDS` | `604800` | How long a login lasts (7 days) |
+| `GREMOTE_SCAN_SUBNET` | your /24 | Subnets the TV scan probes directly, e.g. `192.168.1.0/24,192.168.2.0/24` |
 
 > gremote logs a warning at startup while either secret is still `change-me`.
 > Don't expose the port to the internet. Use Tailscale.
