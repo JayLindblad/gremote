@@ -253,7 +253,7 @@ async def device_screen_stream(ws: WebSocket, device_id: str, size: str = "1280x
     if not hasattr(driver, "screen_stream"):
         await ws.close(code=4422)
         return
-    if not re.fullmatch(r"d{3,4}xd{3,4}", size) or not 250_000 <= bitrate <= 20_000_000:
+    if not re.fullmatch(r"\d{3,4}x\d{3,4}", size) or not 250_000 <= bitrate <= 20_000_000:
         await ws.close(code=4422)
         return
     await ws.accept()
