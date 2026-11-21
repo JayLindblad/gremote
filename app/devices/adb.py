@@ -220,6 +220,23 @@ async def list_activities(host: str, port: int | None = None) -> dict:
             dump = await session.shell(f"dumpsys package {pkg}")
             acts = {m.group(1) for m in re.finditer(rf"\b({re.escape(pkg)}/[\w.$]+)", dump)}
             found[pkg] = sorted(acts)
+            # The resolver table maps each intent action to the activities that answer it.
+            for action, comp in re.findall(
+                    rf'^\s+([A-Za-z][\w.]*):\s*\n\s+\w+\s+({re.escape(pkg)}/[\w.$]+)', dump, re.M):
+                found[pkg].append(f"[handles {action}] {comp}")
         return {"packages": found, "adb_port": session.port}
+    finally:
+        await session.__aexit__()
+
+
+async def supported_pages(host: str, port: int | None = None) -> dict:
+    """Which Settings shortcuts this TV can actually resolve (differs per model/vendor)."""
+    session = await connect_any(host, port)
+    try:
+        result = {}
+        for key, action in SETTINGS_PAGES.items():
+            out = await session.shell(f"cmd package resolve-activity --brief -a {action}")
+            result[key] = "/" in out and "no activity found" not in out.lower()
+        return {"pages": result, "adb_port": session.port}
     finally:
         await session.__aexit__()

@@ -161,7 +161,7 @@ POST   /api/discovery/scan                scan for Sony TVs
 GET    /api/debug/log?after=N             recent events (DELETE clears)
 ```
 
-Actions: `commands` (list the TV supported IRCC names), `settings`, `set_setting`, `methods`, `adb_info`, `adb_open`, `adb_activities`, `power_on`, `power_off`, `toggle_power`, `wake`, `volume_up`, `volume_down`, `set_volume`, `toggle_mute`,
+Actions: `commands` (list the TV supported IRCC names), `settings`, `set_setting`, `methods`, `adb_info`, `adb_open`, `adb_activities`, `adb_supported`, `power_on`, `power_off`, `toggle_power`, `wake`, `volume_up`, `volume_down`, `set_volume`, `toggle_mute`,
 `set_input`, `apps`, `launch_app`, `ircc`, `playing`, `system_info`. For example:
 
 ```bash

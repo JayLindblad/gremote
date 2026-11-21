@@ -332,6 +332,9 @@ class SonyBravia(DeviceDriver):
         if name == "adb_info":
             port = params.get("port")
             return await adb.device_info(self.host, int(port) if port else None)
+        if name == "adb_supported":
+            port = params.get("port")
+            return await adb.supported_pages(self.host, int(port) if port else None)
         if name == "adb_activities":
             port = params.get("port")
             return await adb.list_activities(self.host, int(port) if port else None)

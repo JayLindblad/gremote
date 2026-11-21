@@ -144,6 +144,7 @@ function renderRemote() {
   $('#remote').classList.toggle('disabled', !selected);
   renderApps();
   renderCommands();
+  applyPagesSupport();
   loadCommands();
 }
 
@@ -795,12 +796,44 @@ async function listActivities() {
   }
 }
 
+// Which shortcuts this TV can resolve; unsupported buttons are hidden (kept per TV).
+const pagesSupport = {};
+
+function applyPagesSupport() {
+  const d = currentDevice();
+  const support = d && selected !== ALL ? pagesSupport[d.id] : null;
+  document.querySelectorAll('#settingsPages [data-page]').forEach((b) => {
+    b.hidden = !!support && support[b.dataset.page] === false;
+  });
+}
+
+async function checkSupportedPages() {
+  const d = singleDevice();
+  if (!d) return;
+  const out = $('#adbOut');
+  out.hidden = false;
+  out.textContent = 'Checking which Settings pages this TV supports…';
+  try {
+    const { result } = await api('POST', `/api/devices/${d.id}/action`, { action: 'adb_supported' });
+    pagesSupport[d.id] = result.pages;
+    const names = Object.fromEntries(SETTINGS_PAGES);
+    const yes = Object.keys(result.pages).filter((k) => result.pages[k]).map((k) => names[k]);
+    const no = Object.keys(result.pages).filter((k) => !result.pages[k]).map((k) => names[k]);
+    out.textContent = `Supported: ${yes.join(', ') || 'none'}\nNot available on this TV (hidden): ${no.join(', ') || 'none'}`;
+    applyPagesSupport();
+  } catch (err) {
+    if (!(err instanceof AuthError)) out.textContent = `Failed: ${err.message}`;
+  }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
+  $('#adbSupported').addEventListener('click', checkSupportedPages);
   $('#adbActivities').addEventListener('click', listActivities);
   const grid = $('#settingsPages');
   SETTINGS_PAGES.forEach(([page, label]) => {
     const b = document.createElement('button');
     b.className = 'app';
+    b.dataset.page = page;
     b.textContent = label;
     b.addEventListener('click', () => openSettingsPage({ page }));
     grid.appendChild(b);
