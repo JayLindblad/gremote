@@ -105,6 +105,7 @@ class WebCodecsPlayer {
         if (this.latest) { this.latest.close(); this.skipped++; }   // a newer frame won: drop this one
         this.latest = frame;
         this.frames++;
+        if (this.frames === 1 && typeof diagLine === 'function') diagLine('decoder produced its first frame');
       },
       error: (e) => this.onError(`Video decoder: ${e.name || 'error'}: ${e.message} (codec ${codec}, ${this.chunks} chunks sent)`),
     });
@@ -135,6 +136,11 @@ class WebCodecsPlayer {
     data.set(nal, 4);
     this.timestamp += 33333;
     this.chunks++;
+    if (this.chunks <= 25 && typeof diagLine === 'function') {
+      const hex = (a) => Array.from(a, (b) => b.toString(16).padStart(2, '0')).join(' ');
+      diagLine(`decoder chunk #${this.chunks} ${key ? 'KEY' : 'delta'} nal=${nal.length} bytes `
+        + `head=${hex(nal.subarray(0, 8))} tail=${hex(nal.subarray(Math.max(0, nal.length - 4)))}`);
+    }
     this.decoder.decode(new EncodedVideoChunk({ type: key ? 'key' : 'delta', timestamp: this.timestamp, data }));
   }
 

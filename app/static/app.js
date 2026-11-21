@@ -835,6 +835,8 @@ let screenRunning = false;
 let liveWs = null;
 let livePlayer = null;
 let liveTimer = null;
+let preferMse = false;   // set once WebCodecs fails, so the preview falls back instead of stopping
+let liveNote = '';
 const canPlayLive = () => WebCodecsPlayer.supported() || MsePlayer.supported();
 
 function stopLive() {
@@ -895,9 +897,18 @@ function startDiagnostic() {
 
 function startLive(d) {
   $('#screenImg').hidden = true;
-  livePlayer = WebCodecsPlayer.supported()
-    ? new WebCodecsPlayer($('#screenCanvas'), (msg) => stopScreen(`Failed: ${msg}`))
-    : new MsePlayer($('#screenVideo'));
+  if (WebCodecsPlayer.supported() && !preferMse) {
+    livePlayer = new WebCodecsPlayer($('#screenCanvas'), (msg) => {
+      diagLine(`WebCodecs failed: ${msg}; falling back to MSE`);
+      if (!MsePlayer.supported()) { stopScreen(`Failed: ${msg}`); return; }
+      preferMse = true;
+      stopLive();
+      startLive(d);
+      liveNote = `WebCodecs failed (${msg}), using MSE · `;
+    });
+  } else {
+    livePlayer = new MsePlayer($('#screenVideo'));
+  }
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   const quality = $('#screenQuality').value;   // already "size=WxH&bitrate=N"; must not be escaped
   const ws = new WebSocket(`${proto}://${location.host}/api/devices/${d.id}/screen/stream?${quality}${diag ? "&diag=1" : ""}`);
@@ -922,7 +933,7 @@ function startLive(d) {
   liveTimer = setInterval(() => {
     const secs = (performance.now() - since) / 1000;
     $('#screenStatus').hidden = false;
-    $('#screenStatus').textContent = `${Math.round(bytes * 8 / 1000 / secs)} kbit/s · ${livePlayer.stats()}`;
+    $('#screenStatus').textContent = `${liveNote}${Math.round(bytes * 8 / 1000 / secs)} kbit/s · ${livePlayer.stats()}`;
     diagLine(`client: ${$("#screenStatus").textContent} | ${livePlayer.debug()} | ws=${ws.readyState}`);
     bytes = 0;
     since = performance.now();
@@ -978,6 +989,7 @@ function toggleScreen() {
   const d = singleDevice();
   if (!d) return;
   screenRunning = true;
+  liveNote = '';
   $('#screenToggle').textContent = 'Stop preview';
   $('#screenStatus').hidden = false;
   $('#screenStatus').textContent = 'Connecting to the TV (first frame can take a few seconds)…';
