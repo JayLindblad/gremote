@@ -996,6 +996,38 @@ function toggleScreen() {
   if (canPlayLive()) startLive(d); else screenLoop(d.id);
 }
 
+async function downloadSample() {
+  const d = singleDevice();
+  if (!d) return;
+  if (screenRunning) stopScreen();
+  const btn = $('#sampleBtn');
+  const link = $('#sampleLink');
+  btn.disabled = true;
+  link.hidden = true;
+  const status = $('#screenStatus');
+  status.hidden = false;
+  status.textContent = 'Recording a 5 s sample from the TV…';
+  try {
+    const res = await fetch(`/api/devices/${d.id}/screen/sample?${$('#screenQuality').value}`, { credentials: 'same-origin' });
+    if (!res.ok) {
+      let detail = res.statusText;
+      try { detail = (await res.json()).detail || detail; } catch { /* not JSON */ }
+      throw new Error(detail);
+    }
+    const blob = await res.blob();
+    URL.revokeObjectURL(link.href || '');
+    link.href = URL.createObjectURL(blob);
+    link.download = 'tv-sample.h264';
+    link.hidden = false;
+    link.textContent = `Save the video sample (${Math.round(blob.size / 1024)} KB)`;
+    status.textContent = 'Sample ready: use the link below to save it.';
+  } catch (err) {
+    status.textContent = `Failed: ${err.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 async function runBench() {
   const d = singleDevice();
   if (!d) return;
@@ -1015,6 +1047,7 @@ async function runBench() {
 document.addEventListener('DOMContentLoaded', () => {
   $('#screenBench').addEventListener('click', runBench);
   $('#diagStart').addEventListener('click', startDiagnostic);
+  $('#sampleBtn').addEventListener('click', downloadSample);
   ['loadedmetadata', 'playing', 'waiting', 'stalled', 'error', 'resize', 'emptied'].forEach((t) => $('#screenVideo').addEventListener(t, () => diagLine(`video event: ${t}`)));
   window.addEventListener('error', (e) => diagLine(`page error: ${e.message}`));
   window.addEventListener('unhandledrejection', (e) => diagLine(`unhandled rejection: ${e.reason}`));

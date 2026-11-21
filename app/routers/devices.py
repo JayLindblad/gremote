@@ -367,6 +367,38 @@ async def device_screen_stream(ws: WebSocket, device_id: str, size: str = "1280x
                         action="stream")
 
 
+@router.get("/{device_id}/screen/sample")
+async def device_screen_sample(device_id: str, size: str = "1024x576",
+                               bitrate: int = 3_000_000, seconds: int = 5):
+    """A few seconds of the TV's raw H.264 stream, for checking it offline (VLC, ffprobe)."""
+    device = _require_device(device_id)
+    driver = driver_for(device)
+    if not hasattr(driver, "screen_stream"):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            detail="This device type has no screen stream")
+    if not re.fullmatch(r"\d{3,4}x\d{3,4}", size) or not 250_000 <= bitrate <= 20_000_000:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            detail="Invalid size or bitrate")
+    seconds = max(2, min(seconds, 15))
+    chunks: list[bytes] = []
+
+    async def collect():
+        async for chunk in driver.screen_stream(size, bitrate):
+            chunks.append(chunk)
+
+    try:
+        await asyncio.wait_for(collect(), seconds + 1.5)    # stops on the timer, by design
+    except asyncio.TimeoutError:
+        pass
+    except DeviceError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+    data = b"".join(chunks)
+    debuglog.record(f"Raw sample recorded: {len(data)} bytes at {size}", kind="command",
+                    device=device["name"], action="screen_sample")
+    return Response(content=data, media_type="application/octet-stream",
+                    headers={"Content-Disposition": 'attachment; filename="tv-sample.h264"'})
+
+
 _last_screen_problem: dict[str, str] = {}
 
 
