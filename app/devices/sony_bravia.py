@@ -330,7 +330,8 @@ class SonyBravia(DeviceDriver):
         if name == "fetch_mac":
             return {"mac": await self.fetch_mac()}
         if name == "adb_info":
-            return await adb.device_info(self.host, int(params.get("port", adb.ADB_PORT)))
+            port = params.get("port")
+            return await adb.device_info(self.host, int(port) if port else None)
         if name == "methods":
             return await self.methods()
         if name == "settings":

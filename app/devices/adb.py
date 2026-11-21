@@ -78,13 +78,87 @@ class AdbSession:
             raise DeviceError(f"ADB command failed: {type(exc).__name__}: {exc}") from exc
 
 
-async def device_info(host: str, port: int = ADB_PORT) -> dict:
-    props = {
-        "manufacturer": "ro.product.manufacturer",
-        "model": "ro.product.model",
-        "android": "ro.build.version.release",
-        "sdk": "ro.build.version.sdk",
-        "build": "ro.build.display.id",
-    }
-    async with AdbSession(host, port) as adb:
-        return {k: await adb.shell(f"getprop {p}") for k, p in props.items()}
+# -- port discovery ------------------------------------------------------------------
+# Classic "Network debugging" listens on 5555. Android's newer wireless debugging picks
+# a random port each time it is switched on (30000-50000), so we look for it.
+SCAN_RANGE = range(30000, 50001)
+SCAN_CONCURRENCY = 800
+SCAN_PROBE_TIMEOUT = 0.6
+MAX_CANDIDATES = 4
+
+_known_port: dict[str, int] = {}    # host -> last port that worked
+
+
+async def _is_open(host: str, port: int, sem: asyncio.Semaphore) -> bool:
+    async with sem:
+        try:
+            _, writer = await asyncio.wait_for(asyncio.open_connection(host, port),
+                                               SCAN_PROBE_TIMEOUT)
+        except (OSError, asyncio.TimeoutError):
+            return False
+        writer.close()
+        try:
+            await writer.wait_closed()
+        except OSError:
+            pass
+        return True
+
+
+async def scan_ports(host: str) -> list[int]:
+    """Open TCP ports in the wireless-debugging range, lowest first."""
+    sem = asyncio.Semaphore(SCAN_CONCURRENCY)
+    ports = list(SCAN_RANGE)
+    hits = await asyncio.gather(*(_is_open(host, p, sem) for p in ports))
+    return [p for p, ok in zip(ports, hits) if ok]
+
+
+async def find_candidates(host: str, port: int | None = None) -> list[int]:
+    if port:
+        return [port]
+    first = [p for p in (_known_port.get(host), ADB_PORT) if p]
+    ordered: list[int] = []
+    for p in first:
+        if p not in ordered and await _is_open(host, p, asyncio.Semaphore(1)):
+            ordered.append(p)
+    if not ordered:
+        ordered = (await scan_ports(host))[:MAX_CANDIDATES]
+    return ordered
+
+
+async def connect_any(host: str, port: int | None = None, log=None):
+    """Return a connected AdbSession on whichever port the TV is listening on."""
+    candidates = await find_candidates(host, port)
+    if not candidates:
+        raise DeviceError(
+            f"{host}: no ADB port found (checked {ADB_PORT} and "
+            f"{SCAN_RANGE.start}-{SCAN_RANGE.stop - 1}). Turn on Network/Wireless debugging "
+            "on the TV and make sure it is awake")
+    errors = []
+    for candidate in candidates:
+        session = AdbSession(host, candidate)
+        try:
+            await session.__aenter__()
+        except DeviceError as exc:
+            errors.append(f"port {candidate}: {exc}")
+            continue
+        _known_port[host] = candidate
+        session.port = candidate
+        return session
+    raise DeviceError("; ".join(errors))
+
+
+async def device_info(host: str, port: int | None = None) -> dict:
+    session = await connect_any(host, port)
+    try:
+        props = {
+            "manufacturer": "ro.product.manufacturer",
+            "model": "ro.product.model",
+            "android": "ro.build.version.release",
+            "sdk": "ro.build.version.sdk",
+            "build": "ro.build.display.id",
+        }
+        info = {k: await session.shell(f"getprop {p}") for k, p in props.items()}
+        info["adb_port"] = session.port
+        return info
+    finally:
+        await session.__aexit__()

@@ -757,7 +757,7 @@ async function testAdb() {
   if (!d) return;
   const out = $('#adbOut');
   out.hidden = false;
-  out.textContent = 'Connecting… if the TV shows an "Allow debugging?" prompt, choose Always allow.';
+  out.textContent = 'Looking for the TV’s ADB port (can take ~10s), then connecting… if the TV shows an "Allow debugging?" prompt, choose Always allow.';
   try {
     const { result } = await api('POST', `/api/devices/${d.id}/action`, { action: 'adb_info' });
     out.textContent = `Connected.\n${Object.entries(result).map(([k, v]) => `${k}: ${v}`).join('\n')}`;
