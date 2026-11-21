@@ -87,14 +87,17 @@ class WebCodecsPlayer {
   // Browsers agree on the AVCC form (length-prefixed NAL units plus an avcC description built
   // from the stream's SPS/PPS); the raw Annex B form is not accepted everywhere.
   configure() {
-    const { sps, pps } = this;
+    const { pps } = this;
+    const original = this.sps;
+    const sps = patchSpsLowLatency(original) || original;     // see patchSpsLowLatency
+    this.lowLatencySps = sps !== original;
     const hex = [sps[1], sps[2], sps[3]].map((b) => b.toString(16).padStart(2, '0')).join('');
     const codec = `avc1.${hex}`;
     const description = concatBytes([
       new Uint8Array([1, sps[1], sps[2], sps[3], 0xff, 0xe1, sps.length >> 8, sps.length & 255]), sps,
       new Uint8Array([1, pps.length >> 8, pps.length & 255]), pps,
     ]);
-    const key = `${codec}/${sps.length}/${pps.length}/${Array.from(sps.subarray(4, 12)).join(',')}`;
+    const key = `${codec}/${original.length}/${pps.length}/${Array.from(original.subarray(4, 12)).join(',')}`;
     if (key === this.configKey && this.decoder && this.decoder.state === 'configured') return;
     this.configKey = key;
     if (this.decoder && this.decoder.state !== 'closed') this.decoder.close();
@@ -105,7 +108,10 @@ class WebCodecsPlayer {
         if (this.latest) { this.latest.close(); this.skipped++; }   // a newer frame won: drop this one
         this.latest = frame;
         this.frames++;
-        if (this.frames === 1 && typeof diagLine === 'function') diagLine('decoder produced its first frame');
+        if (!this.sawFrame) {
+          this.sawFrame = true;
+          if (typeof diagLine === 'function') diagLine(`decoder produced its first frame (low-latency SPS: ${this.lowLatencySps})`);
+        }
       },
       error: (e) => this.onError(`Video decoder: ${e.name || 'error'}: ${e.message} (codec ${codec}, ${this.chunks} chunks sent)`),
     });
@@ -219,3 +225,81 @@ MsePlayer.prototype.debug = function debug() {
     + `t=${v.currentTime.toFixed(2)} buffered=[${ranges.join(', ')}] size=${v.videoWidth}x${v.videoHeight} `
     + `error=${v.error ? `${v.error.code} ${v.error.message}` : 'none'}`;
 };
+
+// ---- Low-latency SPS ------------------------------------------------------------------
+// Decoders hold back frames for reordering unless the stream's SPS says none is needed.
+// screenrecord's SPS says nothing, so Chrome waits to fill a large buffer (~8 frames of delay).
+// This rewrites the SPS to declare max_num_reorder_frames = 0 (the stream has no B-frames).
+// Returns a new NAL unit, or null when the SPS is not a plain Baseline/Main/Extended one.
+function patchSpsLowLatency(nal) {
+  try {
+    const profile = nal[1];
+    if (![66, 77, 88].includes(profile)) return null;
+    // Remove emulation-prevention bytes.
+    const rbsp = [];
+    for (let i = 1; i < nal.length; i++) {
+      if (i >= 3 && nal[i] === 3 && nal[i - 1] === 0 && nal[i - 2] === 0) continue;
+      rbsp.push(nal[i]);
+    }
+    let pos = 0;
+    const bit = () => { const v = (rbsp[pos >> 3] >> (7 - (pos & 7))) & 1; pos++; return v; };
+    const bits = (n) => { let v = 0; for (let i = 0; i < n; i++) v = v * 2 + bit(); return v; };
+    const ue = () => { let z = 0; while (bit() === 0 && z < 32) z++; return 2 ** z - 1 + bits(z); };
+    bits(24); ue();                                   // profile, constraints, level, sps id
+    ue();                                             // log2_max_frame_num_minus4
+    const pocType = ue();
+    if (pocType === 0) ue();
+    else if (pocType === 1) return null;
+    const numRef = ue(); bit();                       // num_ref_frames, gaps flag
+    ue(); ue();                                       // width, height
+    if (!bit()) bit();                                // frame_mbs_only (+ mb_adaptive)
+    bit();                                            // direct_8x8
+    if (bit()) { ue(); ue(); ue(); ue(); }            // cropping
+    const vuiFlagPos = pos;
+    const hasVui = bit();
+    let restrictionFlagPos = pos;                     // where bitstream_restriction_flag lives
+    if (hasVui) {
+      if (bit()) { if (bits(8) === 255) bits(32); }   // aspect ratio
+      if (bit()) bit();                               // overscan
+      if (bit()) { bits(4); if (bit()) bits(24); }    // video signal
+      if (bit()) { ue(); ue(); }                      // chroma location
+      if (bit()) bits(65);                            // timing info
+      if (bit() || bit()) return null;                // HRD parameters: not handled
+      bit();                                          // pic_struct_present
+      restrictionFlagPos = pos;
+      if (bit()) return null;                         // already has bitstream restrictions
+    }
+    // Rebuild: copy bits up to the insertion point, then append the restriction block.
+    const out = [];
+    const put = (v, n) => { for (let i = n - 1; i >= 0; i--) out.push((v >> i) & 1); };
+    const putUe = (v) => { const x = v + 1; const len = Math.floor(Math.log2(x)); put(0, len); put(x, len + 1); };
+    const copyTo = hasVui ? restrictionFlagPos : vuiFlagPos;
+    for (let i = 0; i < copyTo; i++) out.push((rbsp[i >> 3] >> (7 - (i & 7))) & 1);
+    if (!hasVui) {
+      put(1, 1);                                      // vui_parameters_present_flag
+      put(0, 1); put(0, 1); put(0, 1); put(0, 1);     // aspect, overscan, video signal, chroma loc
+      put(0, 1); put(0, 1); put(0, 1);                // timing, nal hrd, vcl hrd
+      put(0, 1);                                      // pic_struct_present
+    }
+    put(1, 1);                                        // bitstream_restriction_flag
+    put(1, 1);                                        // motion_vectors_over_pic_boundaries
+    putUe(0); putUe(0);                               // max bytes per pic / bits per mb
+    putUe(15); putUe(15);                             // log2 max mv length h / v
+    putUe(0);                                         // max_num_reorder_frames
+    putUe(Math.max(1, numRef));                       // max_dec_frame_buffering
+    put(1, 1);                                        // rbsp stop bit
+    while (out.length % 8) out.push(0);
+    const bytes = [nal[0]];
+    let zeros = 0;
+    for (let i = 0; i < out.length; i += 8) {
+      let b = 0;
+      for (let j = 0; j < 8; j++) b = (b << 1) | out[i + j];
+      if (zeros >= 2 && b <= 3) { bytes.push(3); zeros = 0; }   // re-add emulation prevention
+      bytes.push(b);
+      zeros = b === 0 ? zeros + 1 : 0;
+    }
+    return new Uint8Array(bytes);
+  } catch {
+    return null;
+  }
+}
