@@ -249,3 +249,12 @@ select {
 #extraKeys { grid-template-columns: repeat(auto-fit, minmax(70px, 1fr)); }
 #extraKeys [hidden] { display: none; }
 #allCommands .app { min-height: 44px; font-size: 12px; font-weight: 500; }
+
+/* TV settings panel */
+.set-group { margin: 14px 0 4px; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; opacity: .7; }
+.set-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; }
+.set-row label { flex: 1 1 40%; font-size: 13px; }
+.set-row input[type=range] { flex: 1 1 40%; }
+.set-row select { flex: 1 1 40%; min-height: 36px; }
+.set-row output { min-width: 28px; text-align: right; font-size: 12px; }
+#methodsOut { white-space: pre-wrap; max-height: 260px; overflow: auto; font-size: 11px; }

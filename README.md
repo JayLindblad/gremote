@@ -10,6 +10,7 @@ keep it private by putting it behind [Tailscale](https://tailscale.com).
 - **Auto-discovery** of Sony TVs (SSDP plus a direct subnet sweep that works on Wi-Fi networks filtering multicast), or add a device by IP address
 - Full remote: power, D-pad, back/home/options, action/sync/audio (and STB menu when the TV has one), volume/mute, channels, playback, number pad, colour keys
 - **All commands** panel listing every remote command the TV itself reports, so nothing is out of reach
+- **TV settings** panel: picture, sound and power-saving settings read from the TV and changed directly (sliders, toggles, dropdowns), plus a "What does my TV expose?" listing
 - **Power on** with the TV's API or Wake-on-LAN
 - **Volume slider, input switching** (TV, HDMI 1-4) and an **app launcher** loaded from the TV
 - Hold a button to repeat it (volume, arrows), keyboard shortcuts on desktop, works as a home-screen app on phones
@@ -160,7 +161,7 @@ POST   /api/discovery/scan                scan for Sony TVs
 GET    /api/debug/log?after=N             recent events (DELETE clears)
 ```
 
-Actions: `commands` (list the TV supported IRCC names), `power_on`, `power_off`, `toggle_power`, `wake`, `volume_up`, `volume_down`, `set_volume`, `toggle_mute`,
+Actions: `commands` (list the TV supported IRCC names), `settings`, `set_setting`, `methods`, `power_on`, `power_off`, `toggle_power`, `wake`, `volume_up`, `volume_down`, `set_volume`, `toggle_mute`,
 `set_input`, `apps`, `launch_app`, `ircc`, `playing`, `system_info`. For example:
 
 ```bash

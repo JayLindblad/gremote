@@ -135,6 +135,104 @@ class SonyBravia(DeviceDriver):
             raise DeviceError(f"Unexpected reply from TV: {str(data)[:200]}")
         return sorted({c["name"] for c in result[1] if isinstance(c, dict) and c.get("name")})
 
+    # -- TV settings (Sony JSON-RPC) --------------------------------------------------
+
+    async def _rpc(self, service: str, method: str, params: list | None = None,
+                   version: str = "1.0"):
+        """Call one Sony JSON-RPC method and return its `result` list."""
+        headers = {"X-Auth-PSK": self.psk} if self.psk else {}
+        payload = {"method": method, "id": 1, "params": params if params is not None else [],
+                   "version": version}
+        timeout = aiohttp.ClientTimeout(total=self.timeout)
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(f"http://{self.host}/sony/{service}", json=payload,
+                                        headers=headers, allow_redirects=False) as resp:
+                    if resp.status in (401, 403):
+                        raise DeviceError("Authentication failed — check the PSK")
+                    if resp.status != 200:
+                        raise DeviceError(f"{self.host} answered HTTP {resp.status} "
+                                          f"for {service}.{method}")
+                    data = await resp.json(content_type=None)
+        except (aiohttp.ClientError, asyncio.TimeoutError, OSError, ValueError) as exc:
+            raise DeviceError(f"{self.host}: {_chain(exc)}") from exc
+        if isinstance(data, dict) and "error" in data:
+            raise DeviceError(f"{service}.{method}: TV error {data['error']}")
+        result = data.get("result") if isinstance(data, dict) else None
+        if not isinstance(result, list):
+            raise DeviceError(f"{service}.{method}: unexpected reply {str(data)[:200]}")
+        return result
+
+    async def _rpc_versions(self, service: str, method: str, params: list, versions):
+        """Try each API version in turn (models differ); raise the last error."""
+        last: DeviceError | None = None
+        for version in versions:
+            try:
+                return await self._rpc(service, method, params, version)
+            except DeviceError as exc:
+                last = exc
+        raise last or DeviceError(f"{service}.{method} failed")
+
+    async def methods(self) -> dict:
+        """Which API methods the TV exposes, per service (read-only discovery)."""
+        out: dict[str, list[str]] = {}
+        for service in ("system", "audio", "videoScreen", "avContent", "appControl"):
+            try:
+                res = await self._rpc(service, "getMethodTypes", [""], "1.0")
+                rows = res[0] if res and isinstance(res[0], list) else []
+                out[service] = sorted({r[0] for r in rows if isinstance(r, list) and r})
+            except DeviceError as exc:
+                out[service] = [f"(unavailable: {exc})"]
+        return {"methods": out}
+
+    async def get_settings(self) -> dict:
+        """Picture/sound/system settings the TV lets us change, with their options."""
+        items: list[dict] = []
+        problems: dict[str, str] = {}
+
+        async def collect(group: str, service: str, method: str, versions):
+            try:
+                res = await self._rpc_versions(service, method, [{"target": ""}], versions)
+            except DeviceError as exc:
+                problems[group] = str(exc)
+                return
+            for row in res[0] if res and isinstance(res[0], list) else []:
+                if isinstance(row, dict) and row.get("target"):
+                    items.append(_setting_item(group, row))
+
+        await collect("picture", "videoScreen", "getPictureQualitySettings", ("1.0",))
+        await collect("sound", "audio", "getSoundSettings", ("1.1", "1.0"))
+
+        try:
+            res = await self._rpc("system", "getPowerSavingMode", [], "1.0")
+            mode = res[0].get("mode") if res and isinstance(res[0], dict) else None
+            if mode is not None:
+                items.append({"group": "system", "target": "powerSavingMode", "value": mode,
+                              "kind": "choice", "available": True,
+                              "options": ["off", "low", "high", "pictureOff"]})
+        except DeviceError as exc:
+            problems["system"] = str(exc)
+        return {"settings": items, "problems": problems}
+
+    async def set_setting(self, params: dict) -> dict:
+        group, target = params.get("group"), params.get("target")
+        value = params.get("value")
+        if group not in ("picture", "sound", "system") or not target or value is None:
+            raise ValueError("set_setting needs group (picture|sound|system), target and value")
+        value = str(value)
+        if group == "picture":
+            await self._rpc("videoScreen", "setPictureQualitySettings",
+                            [{"settings": [{"target": target, "value": value}]}], "1.0")
+        elif group == "sound":
+            await self._rpc_versions("audio", "setSoundSettings",
+                                     [{"settings": [{"target": target, "value": value}]}],
+                                     ("1.1", "1.0"))
+        else:
+            if target != "powerSavingMode":
+                raise ValueError(f"Unknown system setting: {target}")
+            await self._rpc("system", "setPowerSavingMode", [{"mode": value}], "1.0")
+        return {"ok": True, "group": group, "target": target, "value": value}
+
     # -- MAC address lookup -------------------------------------------------------
 
     def _arp_lookup(self) -> str | None:
@@ -199,6 +297,12 @@ class SonyBravia(DeviceDriver):
             return {"commands": await self.list_commands()}
         if name == "fetch_mac":
             return {"mac": await self.fetch_mac()}
+        if name == "methods":
+            return await self.methods()
+        if name == "settings":
+            return await self.get_settings()
+        if name == "set_setting":
+            return await self.set_setting(params)
         if name == "power_on":
             return {"turned_on": await self._call(lambda c: c.turn_on())}
         if name == "power_off":
@@ -253,6 +357,24 @@ class SonyBravia(DeviceDriver):
             if str(app.get("title", "")).lower() == title.lower():
                 return app["uri"]
         raise DeviceError(f"App not found: {title}")
+
+
+def _setting_item(group: str, row: dict) -> dict:
+    """Normalize one Sony setting row into {group,target,value,kind,options|min/max/step}."""
+    item = {"group": group, "target": row["target"], "value": row.get("currentValue"),
+            "available": row.get("isAvailable", True) is not False,
+            "title": row.get("title") or ""}
+    cands = [c for c in row.get("candidate") or [] if isinstance(c, dict)]
+    ranged = next((c for c in cands if "min" in c and "max" in c), None)
+    if ranged:
+        item.update(kind="range", min=_as_int(ranged["min"]), max=_as_int(ranged["max"]),
+                    step=_as_int(ranged.get("step")) or 1)
+    else:
+        options = [str(c["value"]) for c in cands if "value" in c and c.get("isAvailable", True)]
+        item.update(kind="choice", options=options)
+        if set(options) == {"on", "off"}:
+            item["kind"] = "toggle"
+    return item
 
 
 def _as_int(value) -> int | None:

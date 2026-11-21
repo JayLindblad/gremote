@@ -659,6 +659,105 @@ function showDebugText(text) {
   toast('Copy blocked by the browser. Text selected: press Ctrl+C', true, 6000);
 }
 
+// ---------------------------------------------------------- TV settings --
+function singleDevice() {
+  const d = currentDevice();
+  if (!d || selected === ALL) { toast('Pick a single TV tab first', true); return null; }
+  return d;
+}
+
+async function loadTvSettings() {
+  const d = singleDevice();
+  if (!d) return;
+  const note = $('#tvSettingsNote');
+  note.textContent = 'Loading…';
+  try {
+    const { result } = await api('POST', `/api/devices/${d.id}/action`, { action: 'settings' });
+    renderTvSettings(d, result);
+  } catch (err) {
+    if (err instanceof AuthError) return;
+    note.textContent = `Could not load settings: ${err.message} (see Debug log)`;
+  }
+}
+
+function renderTvSettings(d, result) {
+  const box = $('#tvSettings');
+  box.innerHTML = '';
+  const items = (result.settings || []).filter((s) => s.available);
+  const problems = Object.entries(result.problems || {}).map(([g, m]) => `${g}: ${m}`);
+  $('#tvSettingsNote').textContent = items.length
+    ? `${items.length} settings from ${d.name}.` + (problems.length ? ` Not available: ${problems.join('; ')}` : '')
+    : `${d.name} reported no adjustable settings.` + (problems.length ? ` ${problems.join('; ')}` : '');
+  let group = null;
+  items.forEach((s) => {
+    if (s.group !== group) {
+      group = s.group;
+      const h = document.createElement('h4');
+      h.className = 'set-group';
+      h.textContent = { picture: 'Picture', sound: 'Sound', system: 'System' }[group] || group;
+      box.appendChild(h);
+    }
+    const row = document.createElement('div');
+    row.className = 'set-row';
+    const label = document.createElement('label');
+    label.textContent = s.title || s.target;
+    row.appendChild(label);
+    const send = (value) => run('set_setting', { group: s.group, target: s.target, value: String(value) });
+    let input;
+    if (s.kind === 'range') {
+      input = document.createElement('input');
+      input.type = 'range';
+      input.min = s.min; input.max = s.max; input.step = s.step || 1;
+      input.value = s.value;
+      const out = document.createElement('output');
+      out.textContent = s.value;
+      input.addEventListener('input', () => { out.textContent = input.value; });
+      input.addEventListener('change', () => send(input.value));
+      row.append(input, out);
+    } else if (s.kind === 'toggle') {
+      input = document.createElement('input');
+      input.type = 'checkbox';
+      input.checked = s.value === 'on';
+      input.addEventListener('change', () => send(input.checked ? 'on' : 'off'));
+      row.appendChild(input);
+    } else {
+      input = document.createElement('select');
+      const opts = s.options.includes(s.value) ? s.options : [s.value, ...s.options];
+      opts.forEach((o) => {
+        const opt = document.createElement('option');
+        opt.value = o; opt.textContent = o;
+        input.appendChild(opt);
+      });
+      input.value = s.value;
+      input.addEventListener('change', () => send(input.value));
+      row.appendChild(input);
+    }
+    label.title = s.target;
+    box.appendChild(row);
+  });
+}
+
+async function showMethods() {
+  const d = singleDevice();
+  if (!d) return;
+  const out = $('#methodsOut');
+  out.hidden = false;
+  out.textContent = 'Asking the TV…';
+  try {
+    const { result } = await api('POST', `/api/devices/${d.id}/action`, { action: 'methods' });
+    out.textContent = Object.entries(result.methods)
+      .map(([svc, list]) => `${svc}:\n  ${list.join('\n  ')}`).join('\n\n');
+  } catch (err) {
+    if (!(err instanceof AuthError)) out.textContent = `Failed: ${err.message}`;
+  }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  $('#loadTvSettings').addEventListener('click', loadTvSettings);
+  $('#showMethods').addEventListener('click', showMethods);
+  $('#openTvSettingsApp').addEventListener('click', () => run('launch_app', { title: 'Settings' }));
+});
+
 // ------------------------------------------------------------- commands --
 // The TV reports which IRCC commands it supports. Use that to show the extra
 // keys (Action/Sync/Audio/STB) only when available and to list everything else.
