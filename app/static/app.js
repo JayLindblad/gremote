@@ -552,16 +552,33 @@ function wireDebug() {
     try {
       if (navigator.clipboard && window.isSecureContext) await navigator.clipboard.writeText(text);
       else { // plain http on the LAN: the async clipboard API is blocked
+        // Must live inside the open <dialog>: everything outside a modal is inert.
         const ta = document.createElement("textarea");
-        ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
-        document.body.appendChild(ta); ta.select();
+        ta.value = text; ta.readOnly = true; ta.className = "dbg-copy";
+        $("#debug").appendChild(ta); ta.focus(); ta.select();
         const ok = document.execCommand("copy");
         ta.remove();
         if (!ok) throw new Error("copy blocked");
       }
       toast("Copied");
-    } catch { toast("Copy failed; select the text manually", true); }
+    } catch { showDebugText(text); }
   });
   debugTimer = setInterval(() => { if (!$('#app').hidden && !document.hidden) pollDebug(); }, 3000);
 }
 document.addEventListener('DOMContentLoaded', wireDebug);
+
+// Last-resort copy: show the log in a text box the user can select by hand.
+function showDebugText(text) {
+  let box = $('#dbgText');
+  if (!box) {
+    box = document.createElement('textarea');
+    box.id = 'dbgText';
+    box.readOnly = true;
+    box.className = 'dbg-text';
+    $('#dbgList').before(box);
+  }
+  box.value = text;
+  box.focus();
+  box.select();
+  toast('Copy blocked by the browser. Text selected: press Ctrl+C', true, 6000);
+}
