@@ -51,8 +51,11 @@ pct status "$CTID" >/dev/null 2>&1 && { echo "CTID $CTID already exists. Set CTI
 # 1. Debian template (download if missing)
 echo ">> Looking for a Debian template"
 pveam update >/dev/null
-TEMPLATE_FILE="$(pveam available --section system | awk '$2 ~ /^debian-1[23]-standard/{print $2}' | sort -V | tail -1)"
-[[ -n "$TEMPLATE_FILE" ]] || { echo "Could not find a Debian template."; exit 1; }
+ARCH="$(dpkg --print-architecture)"   # amd64 / arm64 - template must match the host
+# Prefer Debian 12; fall back to 13 only if 12 isn't offered.
+TEMPLATE_FILE="$(pveam available --section system | awk -v a="_${ARCH}." '$2 ~ /^debian-12-standard/ && index($2,a){print $2}' | sort -V | tail -1)"
+[[ -n "$TEMPLATE_FILE" ]] || TEMPLATE_FILE="$(pveam available --section system | awk -v a="_${ARCH}." '$2 ~ /^debian-13-standard/ && index($2,a){print $2}' | sort -V | tail -1)"
+[[ -n "$TEMPLATE_FILE" ]] || { echo "Could not find a Debian template for ${ARCH}."; exit 1; }
 if ! pveam list "$VZTMPL_STORAGE" | grep -q "$TEMPLATE_FILE"; then
   pveam download "$VZTMPL_STORAGE" "$TEMPLATE_FILE"
 fi
