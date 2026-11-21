@@ -146,6 +146,12 @@
           <button class="link" id="adbTest">Test ADB connection</button>
         </div>
         <pre class="note" id="adbOut" hidden></pre>
+        <p class="note">Open a Google TV Settings page directly:</p>
+        <div class="apps" id="settingsPages"></div>
+        <div class="inputs-row">
+          <input id="adbIntent" placeholder="Custom intent action, e.g. android.settings.WIFI_SETTINGS" autocomplete="off" spellcheck="false">
+          <button class="btn small" id="adbIntentGo">Open</button>
+        </div>
       </details>
 
       <details class="panel" id="allCommandsPanel">

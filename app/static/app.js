@@ -766,7 +766,33 @@ async function testAdb() {
   }
 }
 
+const SETTINGS_PAGES = [
+  ['settings', 'Settings home'], ['network', 'Network & Internet'], ['display', 'Display'],
+  ['sound', 'Sound'], ['apps', 'Apps'], ['accessibility', 'Accessibility'],
+  ['bluetooth', 'Bluetooth'], ['datetime', 'Date & time'], ['language', 'Language'],
+  ['keyboard', 'Keyboard'], ['storage', 'Storage'], ['privacy', 'Privacy'],
+  ['location', 'Location'], ['about', 'About'], ['developer', 'Developer options'],
+];
+
+async function openSettingsPage(params) {
+  if (!singleDevice()) return;
+  const r = await run('adb_open', params);
+  if (r) toast('Opened on the TV');
+}
+
 document.addEventListener('DOMContentLoaded', () => {
+  const grid = $('#settingsPages');
+  SETTINGS_PAGES.forEach(([page, label]) => {
+    const b = document.createElement('button');
+    b.className = 'app';
+    b.textContent = label;
+    b.addEventListener('click', () => openSettingsPage({ page }));
+    grid.appendChild(b);
+  });
+  $('#adbIntentGo').addEventListener('click', () => {
+    const intent = $('#adbIntent').value.trim();
+    if (intent) openSettingsPage({ intent });
+  });
   $('#adbTest').addEventListener('click', testAdb);
   $('#loadTvSettings').addEventListener('click', loadTvSettings);
   $('#showMethods').addEventListener('click', showMethods);

@@ -162,3 +162,43 @@ async def device_info(host: str, port: int | None = None) -> dict:
         return info
     finally:
         await session.__aexit__()
+
+
+# -- Settings shortcuts ----------------------------------------------------------------
+# key -> Android settings intent action. Most route to the matching Google TV page.
+SETTINGS_PAGES = {
+    "settings": "android.settings.SETTINGS",
+    "network": "android.settings.WIFI_SETTINGS",
+    "display": "android.settings.DISPLAY_SETTINGS",
+    "sound": "android.settings.SOUND_SETTINGS",
+    "apps": "android.settings.APPLICATION_SETTINGS",
+    "accessibility": "android.settings.ACCESSIBILITY_SETTINGS",
+    "bluetooth": "android.settings.BLUETOOTH_SETTINGS",
+    "datetime": "android.settings.DATE_SETTINGS",
+    "language": "android.settings.LOCALE_SETTINGS",
+    "keyboard": "android.settings.INPUT_METHOD_SETTINGS",
+    "storage": "android.settings.INTERNAL_STORAGE_SETTINGS",
+    "privacy": "android.settings.PRIVACY_SETTINGS",
+    "location": "android.settings.LOCATION_SOURCE_SETTINGS",
+    "about": "android.settings.DEVICE_INFO_SETTINGS",
+    "developer": "android.settings.APPLICATION_DEVELOPMENT_SETTINGS",
+}
+
+_SAFE_INTENT = __import__("re").compile(r"^[A-Za-z0-9_.:/$-]{3,200}$")
+
+
+async def open_settings(host: str, page: str | None = None, intent: str | None = None,
+                        port: int | None = None) -> dict:
+    """Open a Settings page on the TV by shortcut key or a custom intent action."""
+    action = SETTINGS_PAGES.get(page or "") or intent
+    if not action or not _SAFE_INTENT.match(action):
+        raise ValueError("Unknown settings page, or invalid intent action")
+    session = await connect_any(host, port)
+    try:
+        out = await session.shell(f"am start -a {action}")
+    finally:
+        await session.__aexit__()
+    lowered = out.lower()
+    if "error" in lowered or "unable to resolve" in lowered or "exception" in lowered:
+        raise DeviceError(f"TV could not open {action}: {out[:300]}")
+    return {"opened": action, "adb_port": session.port}
