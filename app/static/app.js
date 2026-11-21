@@ -849,7 +849,7 @@ function startLive(d) {
     ? new WebCodecsPlayer($('#screenCanvas'), (msg) => stopScreen(`Failed: ${msg}`))
     : new MsePlayer($('#screenVideo'));
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const quality = encodeURIComponent($('#screenQuality').value);
+  const quality = $('#screenQuality').value;   // already "size=WxH&bitrate=N"; must not be escaped
   const ws = new WebSocket(`${proto}://${location.host}/api/devices/${d.id}/screen/stream?${quality}`);
   ws.binaryType = 'arraybuffer';
   liveWs = ws;
