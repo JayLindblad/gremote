@@ -26,6 +26,15 @@ function splitNals(u8) {
   return nals;
 }
 
+// Counts of NAL types seen since the last stats line, for diagnosing a black picture.
+const NAL_NAMES = { 1: 'p', 5: 'idr', 7: 'sps', 8: 'pps' };
+function countNal(counts, type) { counts[type] = (counts[type] || 0) + 1; }
+function describeNals(counts) {
+  const out = Object.entries(counts).map(([t, n]) => `${NAL_NAMES[t] || `type${t}`}:${n}`).join(' ');
+  Object.keys(counts).forEach((t) => delete counts[t]);
+  return out || 'no video data';
+}
+
 function concatBytes(parts) {
   const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
   let at = 0;
@@ -50,6 +59,7 @@ class WebCodecsPlayer {
     this.frames = 0;
     this.skipped = 0;
     this.dead = false;
+    this.nals = {};
     canvas.hidden = false;
     const paint = () => {
       if (this.dead) return;
@@ -89,6 +99,7 @@ class WebCodecsPlayer {
   feed(u8) {
     for (const nal of splitNals(u8)) {
       const type = nal[0] & 31;
+      countNal(this.nals, type);
       if (type === 7) { this.sps = nal; this.configure(nal); }
       else if (type === 8) this.pps = nal;
       else if (type === 5 || type === 1) this.decode(nal, type === 5);
@@ -107,7 +118,7 @@ class WebCodecsPlayer {
   }
 
   stats() {
-    const s = `WebCodecs · ${this.frames} decoded, ${this.skipped} skipped`;
+    const s = `WebCodecs · ${this.frames} decoded, ${this.skipped} skipped · ${describeNals(this.nals)}`;
     this.frames = 0;
     this.skipped = 0;
     return `${s} · ${this.canvas.width ? `${this.canvas.width}×${this.canvas.height}` : 'waiting for the first frame…'}`;
@@ -130,6 +141,7 @@ class MsePlayer {
     this.mux = new JMuxer({ node: video.id, mode: 'video', fps: 30, flushingTime: 0, debug: false });
     video.hidden = false;
     this.jumps = 0;
+    this.nals = {};
     this.timer = setInterval(() => this.catchUp(), 250);
   }
 
@@ -143,11 +155,14 @@ class MsePlayer {
     if (v.paused) v.play().catch(() => {});
   }
 
-  feed(u8) { this.mux.feed({ video: u8 }); }
+  feed(u8) {
+    splitNals(u8).forEach((n) => countNal(this.nals, n[0] & 31));
+    this.mux.feed({ video: u8 });
+  }
 
   stats() {
     const v = this.video;
-    const s = `MSE · lag ${Math.round((this.lag || 0) * 1000)} ms, ${this.jumps} jumps to live`;
+    const s = `MSE · lag ${Math.round((this.lag || 0) * 1000)} ms, ${this.jumps} jumps to live · ${describeNals(this.nals)}`;
     this.jumps = 0;
     return `${s} · ${v.videoWidth ? `${v.videoWidth}×${v.videoHeight}` : 'waiting for the first frame…'}`;
   }

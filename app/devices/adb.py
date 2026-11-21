@@ -286,6 +286,18 @@ async def screenshot(host: str, port: int | None = None) -> bytes:
     raise DeviceError("screenshot failed")
 
 
+async def _raise_encoder_error(session, size: str, exc) -> None:
+    """The stream produced nothing: surface what screenrecord said on the TV, if anything."""
+    try:
+        said = await session.shell("head -c 600 /data/local/tmp/gremote-sr.err")
+    except DeviceError:
+        said = ""
+    if said:
+        raise DeviceError(f"The TV's screenrecord failed at {size}: {said}")
+    if exc is None:
+        raise DeviceError(f"The TV's screenrecord ended without producing video at {size}")
+
+
 async def stream_h264(host: str, size: str = "1280x720", bitrate: int = 4_000_000,
                       port: int | None = None):
     """Yield raw H.264 (Annex B) chunks from the TV's screenrecord, restarting it every ~3 min.
@@ -296,8 +308,9 @@ async def stream_h264(host: str, size: str = "1280x720", bitrate: int = 4_000_00
     if not re.fullmatch(r"\d{3,4}x\d{3,4}", size):
         raise ValueError("size must look like 1280x720")
     session = await connect_any(host, port)
-    command = (f"screenrecord --time-limit 170 --size {size} --bit-rate {int(bitrate)} "
-               "--output-format=h264 - 2>/dev/null | base64")
+    command = ("rm -f /data/local/tmp/gremote-sr.err; "
+               f"screenrecord --time-limit 170 --size {size} --bit-rate {int(bitrate)} "
+               "--output-format=h264 - 2>/data/local/tmp/gremote-sr.err | base64")
     failures = 0
     try:
         while failures < 3:
@@ -314,11 +327,14 @@ async def stream_h264(host: str, size: str = "1280x720", bitrate: int = 4_000_00
                         pending = pending[usable:]
             except Exception as exc:    # read timeout, dropped link, ...
                 if not got_data:
+                    await _raise_encoder_error(session, size, exc)
                     failures += 1
                     if failures >= 3:
                         raise DeviceError(f"Screen stream failed: {type(exc).__name__}: {exc}") from exc
                     continue
-            failures = 0 if got_data else failures + 1
+            if not got_data:
+                await _raise_encoder_error(session, size, None)
+            failures = 0
     finally:
         await session.__aexit__()
 
