@@ -1,5 +1,6 @@
 """FastAPI application entrypoint."""
 
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -11,11 +12,18 @@ from .config import settings
 from .db import init_db
 from .routers import auth, devices, discovery
 
-STATIC_DIR = Path(__file__).resolve().parent / "static"
+log = logging.getLogger("gremote")
+
+STATIC_DIR =Path(__file__).resolve().parent / "static"
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    if "change-me" in (settings.secret_key, settings.admin_password):
+        log.warning(
+            "GREMOTE_SECRET_KEY / GREMOTE_ADMIN_PASSWORD are still the default 'change-me'; "
+            "set real values in .env before exposing this."
+        )
     init_db()
     yield
 
