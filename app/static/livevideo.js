@@ -35,6 +35,10 @@ function describeNals(counts) {
   return out || 'no video data';
 }
 
+function startsWithStartCode(u8) {
+  return u8.length > 3 && u8[0] === 0 && u8[1] === 0 && (u8[2] === 1 || (u8[2] === 0 && u8[3] === 1));
+}
+
 function concatBytes(parts) {
   const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
   let at = 0;
@@ -97,6 +101,7 @@ class WebCodecsPlayer {
   }
 
   feed(u8) {
+    if (!startsWithStartCode(u8)) return;      // tail of a frame we already passed on: unusable alone
     for (const nal of splitNals(u8)) {
       const type = nal[0] & 31;
       countNal(this.nals, type);
@@ -151,11 +156,13 @@ class MsePlayer {
     if (!b.length) return;
     const end = b.end(b.length - 1);
     this.lag = end - v.currentTime;
-    if (this.lag > 0.25) { v.currentTime = end - 0.03; this.jumps++; }   // drop what we are behind on
+    if (this.lag > 0.6) { v.currentTime = end - 0.03; this.jumps++; }    // far behind: skip ahead
+    else v.playbackRate = this.lag > 0.12 ? 1.2 : 1;                       // a little behind: catch up smoothly
     if (v.paused) v.play().catch(() => {});
   }
 
   feed(u8) {
+    if (!startsWithStartCode(u8)) return;      // tail of a frame we already passed on: unusable alone
     splitNals(u8).forEach((n) => countNal(this.nals, n[0] & 31));
     this.mux.feed({ video: u8 });
   }

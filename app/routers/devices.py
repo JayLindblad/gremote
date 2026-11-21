@@ -238,7 +238,23 @@ async def device_screen(device_id: str):
 
 _streams: dict[str, asyncio.Task] = {}     # one live stream per device; a new viewer replaces it
 START_CODE = b"\x00\x00\x00\x01"
-IDLE_FLUSH_SECONDS = 0.06
+IDLE_FLUSH_SECONDS = 0.06     # a small frame is assumed complete after this much quiet
+BIG_FRAME_BYTES = 8000
+BIG_FRAME_FLUSH_SECONDS = 0.25    # large frames trickle in; do not cut them in half
+KEYFRAME_FLUSH_SECONDS = 0.4
+
+
+def _flush_after(buf: bytes) -> float | None:
+    """How long to wait for more data before treating the buffered tail as a whole NAL unit.
+
+    None means wait indefinitely: the buffer holds only a start code, so sending it would cut
+    the next frame in two.
+    """
+    if len(buf) <= len(START_CODE) + 1:
+        return None
+    if buf.startswith(START_CODE) and buf[4] & 31 == 5:     # IDR keyframe
+        return KEYFRAME_FLUSH_SECONDS
+    return BIG_FRAME_FLUSH_SECONDS if len(buf) > BIG_FRAME_BYTES else IDLE_FLUSH_SECONDS
 
 
 @router.websocket("/{device_id}/screen/stream")
@@ -292,7 +308,7 @@ async def device_screen_stream(ws: WebSocket, device_id: str, size: str = "1280x
         buf = b""
         while True:
             try:
-                item = await asyncio.wait_for(queue.get(), IDLE_FLUSH_SECONDS)
+                item = await asyncio.wait_for(queue.get(), _flush_after(buf))
             except asyncio.TimeoutError:      # stream went quiet: the last frame is complete
                 if buf:
                     await send(buf)
