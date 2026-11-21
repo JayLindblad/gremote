@@ -15,6 +15,7 @@ keep it private by putting it behind [Tailscale](https://tailscale.com).
 - Live power status on every tab
 - **Debug log** window showing every command, its result, timing and the underlying error when one fails
 - **Wake-on-LAN MAC read from the TV itself** when you add it
+- Edit a device (name, IP, MAC, PSK) with the pencil icon in ⚙; PSKs are never sent back to the browser
 - Password login; settings and data survive updates
 
 ## Setup (local)
@@ -149,7 +150,7 @@ All endpoints are JSON and need a session cookie from `POST /api/auth/login`.
 GET    /api/devices                       list devices
 GET    /api/devices/types                 supported device types
 POST   /api/devices   {name,type,host,mac?,config?}   add a device
-PUT    /api/devices/:id                   update a device
+PUT    /api/devices/:id                   edit a device (blank PSK keeps the stored one)
 DELETE /api/devices/:id
 GET    /api/devices/:id/status            power, volume, mute
 POST   /api/devices/:id/action {action, params?}

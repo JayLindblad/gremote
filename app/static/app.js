@@ -327,10 +327,18 @@ function renderDeviceList() {
     const badge = document.createElement('span');
     badge.className = 'badge';
     badge.textContent = d.type;
-    head.append(name, badge);
+    const pencil = document.createElement('button');
+    pencil.className = 'icon-btn small';
+    pencil.type = 'button';
+    pencil.title = `Edit ${d.name}`;
+    pencil.setAttribute('aria-label', `Edit ${d.name}`);
+    pencil.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>';
+    pencil.addEventListener('click', () => card.replaceWith(buildEditForm(d)));
+    head.append(name, badge, pencil);
     const meta = document.createElement('div');
     meta.className = 'meta';
-    meta.textContent = d.host + (d.mac ? ` · ${d.mac}` : " · no MAC (Wake-on-LAN off)");
+    meta.textContent = d.host + (d.mac ? ` · ${d.mac}` : ' · no MAC (Wake-on-LAN off)') +
+      (d.has_psk ? ' · PSK set' : ' · no PSK');
     const actions = document.createElement('div');
     actions.className = 'actions';
     const del = document.createElement('button');
@@ -359,6 +367,65 @@ function renderDeviceList() {
     card.append(head, meta, actions);
     list.appendChild(card);
   });
+}
+
+function buildEditForm(d) {
+  const form = document.createElement('form');
+  form.className = 'tv-card edit-form';
+  const field = (name, value, placeholder, type = 'text') => {
+    const label = document.createElement('label');
+    label.className = 'field';
+    const span = document.createElement('span');
+    span.textContent = placeholder;
+    const input = document.createElement('input');
+    input.name = name;
+    input.type = type;
+    input.value = value || '';
+    input.autocomplete = type === 'password' ? 'new-password' : 'off';
+    label.append(span, input);
+    return { label, input };
+  };
+  const nameF = field('name', d.name, 'Name');
+  const hostF = field('host', d.host, 'IP address');
+  const macF = field('mac', d.mac, 'MAC (Wake-on-LAN)');
+  const pskF = field('psk', '', d.has_psk ? 'Pre-Shared Key (leave blank to keep the current one)' : 'Pre-Shared Key', 'password');
+  nameF.input.required = true;
+  hostF.input.required = true;
+
+  const actions = document.createElement('div');
+  actions.className = 'actions';
+  const save = document.createElement('button');
+  save.className = 'btn small primary';
+  save.type = 'submit';
+  save.textContent = 'Save';
+  const cancel = document.createElement('button');
+  cancel.className = 'btn small';
+  cancel.type = 'button';
+  cancel.textContent = 'Cancel';
+  cancel.addEventListener('click', renderDeviceList);
+  actions.append(save, cancel);
+
+  form.append(nameF.label, hostF.label, macF.label, pskF.label, actions);
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    save.disabled = true;
+    const body = {
+      name: nameF.input.value,
+      type: d.type,
+      host: hostF.input.value,
+      mac: macF.input.value || null,
+      config: pskF.input.value ? { psk: pskF.input.value } : {},
+    };
+    try {
+      await api('PUT', `/api/devices/${d.id}`, body);
+      toast(`Saved ${body.name}`);
+      await loadDevices();
+    } catch (err) {
+      if (!(err instanceof AuthError)) toast(err.message, true);
+      save.disabled = false;
+    }
+  });
+  return form;
 }
 
 async function addDevice(e) {

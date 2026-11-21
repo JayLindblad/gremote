@@ -35,6 +35,18 @@ class ActionRequest(BaseModel):
     params: dict = {}
 
 
+SECRET_CONFIG_KEYS = {"psk"}
+
+
+def _public(device: dict) -> dict:
+    """Device for API responses: secrets stay on the server, the UI only learns they exist."""
+    cfg = device.get("config") or {}
+    out = dict(device)
+    out["config"] = {k: v for k, v in cfg.items() if k not in SECRET_CONFIG_KEYS}
+    out["has_psk"] = bool(cfg.get("psk"))
+    return out
+
+
 def _require_device(device_id: str) -> dict:
     device = get_device(device_id)
     if not device:
@@ -96,7 +108,7 @@ async def types():
 
 @router.get("")
 async def index():
-    return {"devices": list_devices()}
+    return {"devices": [_public(d) for d in list_devices()]}
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
@@ -113,7 +125,7 @@ async def create(body: DeviceIn):
                     kind="device")
     if not device.get("mac"):
         device = await _auto_mac(device)
-    return {"device": device}
+    return {"device": _public(device)}
 
 
 async def _auto_mac(device: dict) -> dict:
@@ -143,21 +155,32 @@ async def fetch_mac(device_id: str):
                             detail="The TV did not report a MAC address")
     device = upsert_device(device_id, name=device["name"], type=device["type"],
                            host=device["host"], mac=mac, config=device["config"])
-    return {"device": device}
+    return {"device": _public(device)}
 
 
 @router.put("/{device_id}")
 async def update(device_id: str, body: DeviceIn):
-    _require_device(device_id)
+    existing = _require_device(device_id)
+    # Blank config values (e.g. an empty PSK field) mean "keep what is stored".
+    config = {**existing["config"], **{k: v for k, v in body.config.items() if v not in (None, "")}}
+    mac = body.mac.strip() if body.mac and body.mac.strip() else None
     device = upsert_device(
         device_id,
-        name=body.name,
+        name=body.name.strip() or existing["name"],
         type=body.type,
-        host=body.host,
-        mac=body.mac,
-        config=body.config,
+        host=body.host.strip(),
+        mac=mac,
+        config=config,
     )
-    return {"device": device}
+    changed = [f for f, old, new in (
+        ("name", existing["name"], device["name"]), ("host", existing["host"], device["host"]),
+        ("mac", existing.get("mac"), device.get("mac")),
+        ("psk", existing["config"].get("psk"), device["config"].get("psk")),
+    ) if old != new]
+    debuglog.record("Edited (" + (", ".join(changed) or "no changes") + ")", kind="device",
+                    device=device["name"])
+    _last_status_problem.pop(device_id, None)   # re-evaluate status with the new settings
+    return {"device": _public(device)}
 
 
 @router.delete("/{device_id}")
