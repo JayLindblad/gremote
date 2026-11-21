@@ -4,6 +4,17 @@ This walks through putting gremote on a small always-on Proxmox box on grandad's
 LAN and reaching it privately over Tailscale. Assumes you already have Proxmox
 installed and a Debian 12 template available.
 
+## Quick path (automated)
+
+On the Proxmox host shell, as root:
+
+    bash -c "$(curl -fsSL https://raw.githubusercontent.com/JayLindblad/gremote/main/deploy/create-lxc.sh)"
+
+This does steps 1-4 below (container, TUN device, app, systemd, Tailscale
+install) and generates `.env` secrets. Then run `pct exec <CTID> -- tailscale up`.
+Update later with `update` inside the container. The rest of this document is
+the manual equivalent.
+
 ## 1. Create the container
 
 In the Proxmox UI, create an unprivileged Debian 12 container:

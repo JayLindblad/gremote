@@ -36,7 +36,26 @@ Open http://127.0.0.1:8000 and log in with the password you set in .env.
 
 ## Deploying to Proxmox
 
-See deploy/lxc-setup.md for the full LXC + Tailscale walkthrough.
+Run on the Proxmox host shell (as root) to create the LXC, install the app and
+generate your secrets:
+
+    bash -c "$(curl -fsSL https://raw.githubusercontent.com/JayLindblad/gremote/main/deploy/create-lxc.sh)"
+
+Defaults (CTID, 1 core, 512 MB, 4 GB disk, DHCP) can be overridden with env vars,
+e.g. `CTID=112 STORAGE=local-zfs IP=192.168.1.50/24 GATEWAY=192.168.1.1 bash -c "..."`.
+
+**Updating** after you push changes to GitHub, either inside the container:
+
+    update
+
+or from the Proxmox host:
+
+    bash -c "$(curl -fsSL https://raw.githubusercontent.com/JayLindblad/gremote/main/deploy/create-lxc.sh)" -- update
+
+Updates fast-forward `/opt/gremote`, refresh dependencies and restart the
+service; `.env` and the database are left untouched.
+
+See deploy/lxc-setup.md for the manual walkthrough and Tailscale details.
 
 ## License
 
