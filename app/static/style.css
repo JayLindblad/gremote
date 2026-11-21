@@ -244,3 +244,8 @@ select {
 .icon-btn.small { width: 32px; height: 32px; border-radius: 10px; }
 .edit-form .field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
 .edit-form .field input { font-size: 15px; }
+
+/* ---------- extra keys / all commands ---------- */
+#extraKeys { grid-template-columns: repeat(auto-fit, minmax(70px, 1fr)); }
+#extraKeys [hidden] { display: none; }
+#allCommands .app { min-height: 44px; font-size: 12px; font-weight: 500; }

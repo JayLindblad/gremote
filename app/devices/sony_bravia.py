@@ -20,6 +20,8 @@ import base64
 import binascii
 import socket
 
+import aiohttp
+
 from pybravia import (
     BraviaAuthError,
     BraviaClient,
@@ -109,6 +111,30 @@ class SonyBravia(DeviceDriver):
         await asyncio.to_thread(self._send_wol)
         return {"wake": "sent", "mac": normalize_mac(self.mac)}
 
+    # -- supported remote commands -------------------------------------------------
+
+    async def list_commands(self) -> list[str]:
+        """Names of every IRCC remote command this TV supports (its own list)."""
+        headers = {"X-Auth-PSK": self.psk} if self.psk else {}
+        payload = {"method": "getRemoteControllerInfo", "id": 1, "params": [], "version": "1.0"}
+        timeout = aiohttp.ClientTimeout(total=self.timeout)
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(f"http://{self.host}/sony/system", json=payload,
+                                        headers=headers, allow_redirects=False) as resp:
+                    if resp.status in (401, 403):
+                        raise DeviceError("Authentication failed — check the PSK")
+                    if resp.status != 200:
+                        raise DeviceError(f"{self.host} answered HTTP {resp.status} "
+                                          "(is this the TV's IP?)")
+                    data = await resp.json(content_type=None)
+        except (aiohttp.ClientError, asyncio.TimeoutError, OSError, ValueError) as exc:
+            raise DeviceError(f"{self.host}: {_chain(exc)}") from exc
+        result = data.get("result") if isinstance(data, dict) else None
+        if not isinstance(result, list) or len(result) < 2 or not isinstance(result[1], list):
+            raise DeviceError(f"Unexpected reply from TV: {str(data)[:200]}")
+        return sorted({c["name"] for c in result[1] if isinstance(c, dict) and c.get("name")})
+
     # -- MAC address lookup -------------------------------------------------------
 
     def _arp_lookup(self) -> str | None:
@@ -169,6 +195,8 @@ class SonyBravia(DeviceDriver):
             return await self.status()
         if name == "wake":
             return await self.wake()
+        if name == "commands":
+            return {"commands": await self.list_commands()}
         if name == "fetch_mac":
             return {"mac": await self.fetch_mac()}
         if name == "power_on":

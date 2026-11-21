@@ -12,6 +12,8 @@ let devices = [];
 let selected = store.get('selectedDevice') || null;
 const statusCache = {};   // id -> last status dict
 const appsCache = {};     // id -> apps from the TV
+const commandsCache = {}; // id -> IRCC command names the TV supports
+const commandsRequested = new Set();
 
 // ------------------------------------------------------------------ api --
 class AuthError extends Error {}
@@ -141,6 +143,8 @@ function renderTabs() {
 function renderRemote() {
   $('#remote').classList.toggle('disabled', !selected);
   renderApps();
+  renderCommands();
+  loadCommands();
 }
 
 // --------------------------------------------------------------- status --
@@ -246,6 +250,9 @@ function wireRemote() {
   document.querySelectorAll('#remote [data-ircc]').forEach((el) => {
     const code = el.dataset.ircc;
     onTap(el, () => ircc(code), el.hasAttribute('data-repeat') ? { repeat: () => ircc(code, { quiet: true }) } : {});
+  });
+  document.querySelectorAll('#remote [data-ircc-match]').forEach((el) => {
+    onTap(el, () => { if (el.dataset.resolved) ircc(el.dataset.resolved); });
   });
   document.querySelectorAll('#remote [data-action]').forEach((el) => {
     const action = el.dataset.action;
@@ -418,6 +425,8 @@ function buildEditForm(d) {
     };
     try {
       await api('PUT', `/api/devices/${d.id}`, body);
+      delete commandsCache[d.id];
+      commandsRequested.delete(d.id);
       toast(`Saved ${body.name}`);
       await loadDevices();
     } catch (err) {
@@ -648,4 +657,50 @@ function showDebugText(text) {
   box.focus();
   box.select();
   toast('Copy blocked by the browser. Text selected: press Ctrl+C', true, 6000);
+}
+
+// ------------------------------------------------------------- commands --
+// The TV reports which IRCC commands it supports. Use that to show the extra
+// keys (Action/Sync/Audio/STB) only when available and to list everything else.
+async function loadCommands() {
+  const d = currentDevice();
+  if (!d || selected === ALL || commandsCache[d.id] || commandsRequested.has(d.id)) return;
+  commandsRequested.add(d.id);
+  try {
+    const data = await api('POST', `/api/devices/${d.id}/action`, { action: 'commands' });
+    commandsCache[d.id] = (data.result && data.result.commands) || [];
+    if (currentDevice() && currentDevice().id === d.id) renderCommands();
+  } catch (err) {
+    commandsRequested.delete(d.id);   // retry next time the tab is opened
+  }
+}
+
+function renderCommands() {
+  const d = currentDevice();
+  const names = d && selected !== ALL ? commandsCache[d.id] : null;
+  const lower = new Map((names || []).map((n) => [n.toLowerCase(), n]));
+
+  document.querySelectorAll('#extraKeys [data-ircc]').forEach((el) => {
+    // Unknown list (All tab / not loaded / unreachable): keep the default keys visible.
+    el.hidden = !!names && names.length > 0 && !lower.has(el.dataset.ircc.toLowerCase());
+  });
+  document.querySelectorAll('#extraKeys [data-ircc-match]').forEach((el) => {
+    const re = new RegExp(el.dataset.irccMatch, 'i');
+    const hit = (names || []).find((n) => re.test(n));
+    el.dataset.resolved = hit || '';
+    el.hidden = !hit;    // STB only appears when the TV lists such a command
+  });
+
+  const box = $('#allCommands');
+  box.innerHTML = '';
+  $('#allCommandsNote').textContent = names
+    ? `${names.length} commands reported by ${d.name}. Names vary by model.`
+    : 'Every remote command this TV reports. Pick a single device to load them.';
+  (names || []).forEach((name) => {
+    const b = document.createElement('button');
+    b.className = 'app';
+    b.textContent = name;
+    onTap(b, () => ircc(name));
+    box.appendChild(b);
+  });
 }

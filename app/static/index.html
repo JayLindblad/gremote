@@ -74,6 +74,13 @@
         </button>
       </section>
 
+      <section class="row four" id="extraKeys">
+        <button class="btn small" data-ircc="ActionMenu" title="Action menu">Action</button>
+        <button class="btn small" data-ircc="SyncMenu" title="Sync menu (connected devices)">Sync</button>
+        <button class="btn small" data-ircc="Audio" title="Audio / sound mode">Audio</button>
+        <button class="btn small" data-ircc-match="stb" title="Set-top box menu" hidden>STB</button>
+      </section>
+
       <section class="rockers">
         <div class="rocker">
           <button data-ircc="volume_up" data-repeat aria-label="Volume up" title="Volume up (+)">+</button>
@@ -121,6 +128,12 @@
         <div class="panel-actions">
           <button class="link" id="loadApps">Load installed apps from TV</button>
         </div>
+      </details>
+
+      <details class="panel" id="allCommandsPanel">
+        <summary>All commands</summary>
+        <p class="note" id="allCommandsNote">Every remote command this TV reports. Pick a single device to load them.</p>
+        <div class="apps" id="allCommands"></div>
       </details>
 
       <details class="panel">
