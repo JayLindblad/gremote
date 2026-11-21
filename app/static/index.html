@@ -39,6 +39,7 @@
     <div class="status" id="statusBar"></div>
 
     <main class="remote" id="remote">
+      <div class="remote-col">
       <section class="row power-row">
         <button class="btn power" data-action="toggle_power" aria-label="Power" title="Power (P)">
           <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 3v9"/><path d="M6.3 6.8a8 8 0 1 0 11.4 0"/></svg>
@@ -106,7 +107,9 @@
         <button class="btn" data-ircc="stop" aria-label="Stop">&#x23F9;&#xFE0E;</button>
         <button class="btn" data-ircc="Forward" aria-label="Fast forward">&#x23E9;&#xFE0E;</button>
       </section>
+      </div>
 
+      <div class="panel-col">
       <details class="panel" open>
         <summary>Volume &amp; input</summary>
         <div class="vol-wrap">
@@ -156,7 +159,7 @@
         </div>
       </details>
 
-      <details class="panel" id="screenPanel">
+      <details class="panel" id="screenPanel" open>
         <summary>Screen preview (prototype)</summary>
         <p class="note">Shows what the TV is displaying, about once a second, over ADB. Needs Network debugging (see TV settings). Protected video such as Netflix appears black.</p>
         <div class="panel-actions">
@@ -191,6 +194,7 @@
           <button class="btn small" type="submit">Send</button>
         </form>
       </details>
+      </div>
 
       <p class="hint">Keyboard: arrows · Enter · Backspace = Back · H = Home · +/− volume · M mute · P power · Space play/pause</p>
     </main>
