@@ -7,6 +7,7 @@ gremote keeps one RSA key; the TV asks to trust it the first time we connect.
 import asyncio
 import base64
 import os
+import re
 import time
 from pathlib import Path
 
@@ -283,6 +284,43 @@ async def screenshot(host: str, port: int | None = None) -> bytes:
                 await _screen_close(entry)
                 raise DeviceError(f"Could not decode the screenshot: {exc}") from exc
     raise DeviceError("screenshot failed")
+
+
+async def stream_h264(host: str, size: str = "1280x720", bitrate: int = 4_000_000,
+                      port: int | None = None):
+    """Yield raw H.264 (Annex B) chunks from the TV's screenrecord, restarting it every ~3 min.
+
+    The shell channel is a pty that rewrites newlines, so the stream is piped through base64
+    on the TV and decoded here; whitespace in the text is ignored.
+    """
+    if not re.fullmatch(r"\d{3,4}x\d{3,4}", size):
+        raise ValueError("size must look like 1280x720")
+    session = await connect_any(host, port)
+    command = (f"screenrecord --time-limit 170 --size {size} --bit-rate {int(bitrate)} "
+               "--output-format=h264 - 2>/dev/null | base64")
+    failures = 0
+    try:
+        while failures < 3:
+            got_data = False
+            pending = ""
+            try:
+                async for chunk in session._dev.streaming_shell(
+                        command, transport_timeout_s=10.0, read_timeout_s=60.0):
+                    pending += "".join(chunk.split())
+                    usable = len(pending) - len(pending) % 4
+                    if usable:
+                        got_data = True
+                        yield base64.b64decode(pending[:usable])
+                        pending = pending[usable:]
+            except Exception as exc:    # read timeout, dropped link, ...
+                if not got_data:
+                    failures += 1
+                    if failures >= 3:
+                        raise DeviceError(f"Screen stream failed: {type(exc).__name__}: {exc}") from exc
+                    continue
+            failures = 0 if got_data else failures + 1
+    finally:
+        await session.__aexit__()
 
 
 async def benchmark(host: str, port: int | None = None) -> dict:

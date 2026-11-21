@@ -322,6 +322,9 @@ class SonyBravia(DeviceDriver):
     async def screenshot(self) -> bytes:
         return await adb.screenshot(self.host)
 
+    def screen_stream(self):
+        return adb.stream_h264(self.host)
+
     async def action(self, name: str, params: dict | None = None) -> dict:
         params = params or {}
         if name == "status":

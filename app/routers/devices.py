@@ -1,9 +1,10 @@
 """Device registry CRUD plus status/action endpoints."""
 
+import asyncio
 import time
 import traceback
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Response, WebSocket, status
 from pydantic import BaseModel
 
 from .. import debuglog
@@ -232,6 +233,81 @@ async def device_screen(device_id: str):
         _note_status_problem_screen(device, str(exc), _cause(exc))
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
     return Response(content=png, media_type="image/png", headers={"Cache-Control": "no-store"})
+
+
+_streams: dict[str, asyncio.Task] = {}     # one live stream per device; a new viewer replaces it
+START_CODE = b"\x00\x00\x00\x01"
+IDLE_FLUSH_SECONDS = 0.15
+
+
+@router.websocket("/{device_id}/screen/stream")
+async def device_screen_stream(ws: WebSocket, device_id: str):
+    """Live H.264 video of the TV's screen: binary frames for the browser's MSE player."""
+    device = get_device(device_id)
+    if not device:
+        await ws.close(code=4404)
+        return
+    driver = driver_for(device)
+    if not hasattr(driver, "screen_stream"):
+        await ws.close(code=4422)
+        return
+    await ws.accept()
+    previous = _streams.get(device_id)
+    if previous and not previous.done():
+        previous.cancel()
+    queue: asyncio.Queue = asyncio.Queue(maxsize=64)
+
+    async def produce():
+        try:
+            async for chunk in driver.screen_stream():
+                await queue.put(chunk)
+            await queue.put(None)
+        except Exception as exc:    # reported to the browser below
+            await queue.put(exc)
+
+    async def relay():
+        buf = b""
+        while True:
+            try:
+                item = await asyncio.wait_for(queue.get(), IDLE_FLUSH_SECONDS)
+            except asyncio.TimeoutError:      # stream went quiet: the last frame is complete
+                if buf:
+                    await ws.send_bytes(buf)
+                    buf = b""
+                continue
+            if item is None:
+                return
+            if isinstance(item, Exception):
+                raise item
+            buf += item
+            cut = buf.rfind(START_CODE)       # send only whole NAL units
+            if cut > 0:
+                await ws.send_bytes(buf[:cut])
+                buf = buf[cut:]
+
+    producer = asyncio.create_task(produce())
+    relayer = asyncio.create_task(relay())
+    listener = asyncio.create_task(ws.receive())    # completes when the browser goes away
+    _streams[device_id] = relayer
+    debuglog.record("Live screen started", kind="command", device=device["name"], action="stream")
+    try:
+        await asyncio.wait({relayer, listener}, return_when=asyncio.FIRST_COMPLETED)
+        if relayer.done() and not relayer.cancelled() and relayer.exception():
+            exc = relayer.exception()
+            debuglog.record(f"Live screen failed: {exc}", level="error", kind="command",
+                            device=device["name"], action="stream", detail=_cause(exc))
+            await ws.send_json({"error": str(exc)})
+    except Exception:
+        pass
+    finally:
+        for task in (producer, relayer, listener):
+            task.cancel()
+        try:
+            await ws.close()
+        except Exception:
+            pass
+        debuglog.record("Live screen stopped", kind="command", device=device["name"],
+                        action="stream")
 
 
 _last_screen_problem: dict[str, str] = {}

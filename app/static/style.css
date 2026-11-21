@@ -275,5 +275,6 @@ select {
 .inputs-row { display: flex; gap: 8px; margin-top: 8px; }
 .inputs-row input { flex: 1; min-width: 0; }
 #benchOut { white-space: pre-wrap; max-height: 360px; overflow: auto; font-size: 11px; user-select: text; }
+#screenVideo { width: 100%; border-radius: 8px; margin-top: 8px; background: #000; aspect-ratio: 16 / 9; }
 #screenImg { width: 100%; border-radius: 8px; margin-top: 8px; background: #000; }
 #adbOut { white-space: pre-wrap; max-height: 280px; overflow: auto; font-size: 11px; user-select: text; }
