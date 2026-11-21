@@ -5,7 +5,9 @@ gremote keeps one RSA key; the TV asks to trust it the first time we connect.
 """
 
 import asyncio
+import base64
 import os
+import time
 from pathlib import Path
 
 from ..config import settings
@@ -71,9 +73,10 @@ class AdbSession:
             except Exception:
                 pass
 
-    async def shell(self, command: str) -> str:
+    async def shell(self, command: str, timeout: float = 10.0) -> str:
         try:
-            return (await self._dev.shell(command, read_timeout_s=10.0)).strip()
+            return (await self._dev.shell(command, read_timeout_s=timeout,
+                                          transport_timeout_s=timeout)).strip()
         except Exception as exc:
             raise DeviceError(f"ADB command failed: {type(exc).__name__}: {exc}") from exc
 
@@ -227,6 +230,59 @@ async def list_activities(host: str, port: int | None = None) -> dict:
         return {"packages": found, "adb_port": session.port}
     finally:
         await session.__aexit__()
+
+
+# -- screen preview (prototype) -----------------------------------------------------------
+# Frames are `screencap -p` PNGs, base64-encoded so the shell channel cannot mangle bytes.
+# One ADB session per TV is kept open between frames; it is dropped after a short idle time.
+SCREEN_IDLE_SECONDS = 30.0
+_screen: dict[str, dict] = {}   # host -> {"lock", "session", "last"}
+
+
+async def _screen_close(entry: dict) -> None:
+    session, entry["session"] = entry.get("session"), None
+    if session is not None:
+        await session.__aexit__()
+
+
+async def _screen_reaper(host: str) -> None:
+    while True:
+        await asyncio.sleep(SCREEN_IDLE_SECONDS / 2)
+        entry = _screen.get(host)
+        if not entry:
+            return
+        if time.monotonic() - entry["last"] > SCREEN_IDLE_SECONDS:
+            async with entry["lock"]:
+                await _screen_close(entry)
+            _screen.pop(host, None)
+            return
+
+
+async def screenshot(host: str, port: int | None = None) -> bytes:
+    """One PNG frame of what the TV is showing (protected video such as Netflix shows black)."""
+    entry = _screen.get(host)
+    if entry is None:
+        entry = _screen[host] = {"lock": asyncio.Lock(), "session": None, "last": time.monotonic()}
+        asyncio.create_task(_screen_reaper(host))
+    async with entry["lock"]:
+        for attempt in (1, 2):
+            if entry["session"] is None:
+                entry["session"] = await connect_any(host, port)
+            try:
+                out = await entry["session"].shell("screencap -p | base64 -w 0", timeout=20.0)
+                png = base64.b64decode(out, validate=False)
+                if not png.startswith(b"\x89PNG"):
+                    raise DeviceError(f"screencap did not return an image: {out[:120]}")
+                entry["last"] = time.monotonic()
+                return png
+            except DeviceError:
+                await _screen_close(entry)      # reconnect once, then give up
+                if attempt == 2:
+                    raise
+            except ValueError as exc:
+                await _screen_close(entry)
+                raise DeviceError(f"Could not decode the screenshot: {exc}") from exc
+    raise DeviceError("screenshot failed")
 
 
 async def supported_pages(host: str, port: int | None = None) -> dict:

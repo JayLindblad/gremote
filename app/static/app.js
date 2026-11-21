@@ -826,7 +826,64 @@ async function checkSupportedPages() {
   }
 }
 
+// Screen preview: fetch one frame, show it, then fetch the next (never overlapping).
+let screenTimer = null;
+let screenRunning = false;
+
+function stopScreen(message) {
+  screenRunning = false;
+  clearTimeout(screenTimer);
+  $('#screenToggle').textContent = 'Start preview';
+  const status = $('#screenStatus');
+  status.hidden = !message;
+  status.textContent = message || '';
+}
+
+async function screenLoop(deviceId) {
+  if (!screenRunning) return;
+  const started = performance.now();
+  try {
+    const res = await fetch(`/api/devices/${deviceId}/screen?t=${Date.now()}`, { credentials: 'same-origin' });
+    if (res.status === 401) { stopScreen(); location.reload(); return; }
+    if (!res.ok) {
+      let detail = res.statusText;
+      try { detail = (await res.json()).detail || detail; } catch { /* not JSON */ }
+      stopScreen(`Failed: ${detail}`);
+      return;
+    }
+    const url = URL.createObjectURL(await res.blob());
+    const img = $('#screenImg');
+    const old = img.src;
+    img.src = url;
+    img.hidden = false;
+    if (old.startsWith('blob:')) URL.revokeObjectURL(old);
+    const ms = Math.round(performance.now() - started);
+    $('#screenStatus').hidden = false;
+    $('#screenStatus').textContent = `Live · ${ms} ms per frame`;
+  } catch (err) {
+    stopScreen(`Failed: ${err.message}`);
+    return;
+  }
+  if (screenRunning && singleDevice() && currentDevice().id === deviceId) {
+    screenTimer = setTimeout(() => screenLoop(deviceId), 150);
+  } else {
+    stopScreen();
+  }
+}
+
+function toggleScreen() {
+  if (screenRunning) { stopScreen(); return; }
+  const d = singleDevice();
+  if (!d) return;
+  screenRunning = true;
+  $('#screenToggle').textContent = 'Stop preview';
+  $('#screenStatus').hidden = false;
+  $('#screenStatus').textContent = 'Connecting to the TV (first frame can take a few seconds)…';
+  screenLoop(d.id);
+}
+
 document.addEventListener('DOMContentLoaded', () => {
+  $('#screenToggle').addEventListener('click', toggleScreen);
   $('#adbSupported').addEventListener('click', checkSupportedPages);
   $('#adbActivities').addEventListener('click', listActivities);
   const grid = $('#settingsPages');

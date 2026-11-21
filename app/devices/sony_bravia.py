@@ -319,6 +319,9 @@ class SonyBravia(DeviceDriver):
                 info = {"volume": None, "mute": False, "error": _reason(exc)}
         return {"power": power, **info}
 
+    async def screenshot(self) -> bytes:
+        return await adb.screenshot(self.host)
+
     async def action(self, name: str, params: dict | None = None) -> dict:
         params = params or {}
         if name == "status":

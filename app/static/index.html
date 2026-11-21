@@ -156,6 +156,16 @@
         </div>
       </details>
 
+      <details class="panel" id="screenPanel">
+        <summary>Screen preview (prototype)</summary>
+        <p class="note">Shows what the TV is displaying, about once a second, over ADB. Needs Network debugging (see TV settings). Protected video such as Netflix appears black.</p>
+        <div class="panel-actions">
+          <button class="link" id="screenToggle">Start preview</button>
+        </div>
+        <p class="note" id="screenStatus" hidden></p>
+        <img id="screenImg" alt="TV screen" hidden>
+      </details>
+
       <details class="panel" id="allCommandsPanel">
         <summary>All commands</summary>
         <p class="note" id="allCommandsNote">Every remote command this TV reports. Pick a single device to load them.</p>

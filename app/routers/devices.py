@@ -3,7 +3,7 @@
 import time
 import traceback
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel
 
 from .. import debuglog
@@ -216,6 +216,33 @@ def _note_status_problem(device: dict, problem: str | None, detail: str | None) 
     elif previous:
         debuglog.record("Status check recovered", kind="status", device=device["name"],
                         action="status")
+
+
+@router.get("/{device_id}/screen")
+async def device_screen(device_id: str):
+    """One PNG frame of the TV's screen over ADB (prototype of a live preview)."""
+    device = _require_device(device_id)
+    driver = driver_for(device)
+    if not hasattr(driver, "screenshot"):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            detail="This device type has no screen preview")
+    try:
+        png = await driver.screenshot()
+    except DeviceError as exc:
+        _note_status_problem_screen(device, str(exc), _cause(exc))
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+    return Response(content=png, media_type="image/png", headers={"Cache-Control": "no-store"})
+
+
+_last_screen_problem: dict[str, str] = {}
+
+
+def _note_status_problem_screen(device: dict, problem: str, detail: str | None) -> None:
+    """Log a failing preview once, not once per frame."""
+    if _last_screen_problem.get(device["id"]) != problem:
+        _last_screen_problem[device["id"]] = problem
+        debuglog.record(f"Screen preview failed: {problem}", level="error", kind="command",
+                        device=device["name"], action="screen", detail=detail)
 
 
 @router.post("/{device_id}/action")
