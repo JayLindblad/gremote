@@ -23,3 +23,7 @@ class DeviceDriver(ABC):
     @abstractmethod
     async def action(self, name: str, params: dict | None = None) -> dict:
         """Perform a named action and return a small result dict."""
+
+    async def fetch_mac(self) -> str | None:
+        """Best-effort: ask the device (or the ARP table) for its MAC address."""
+        return None

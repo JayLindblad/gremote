@@ -13,6 +13,8 @@ keep it private by putting it behind [Tailscale](https://tailscale.com).
 - **Volume slider, input switching** (TV, HDMI 1-4) and an **app launcher** loaded from the TV
 - Hold a button to repeat it (volume, arrows), keyboard shortcuts on desktop, works as a home-screen app on phones
 - Live power status on every tab
+- **Debug log** window showing every command, its result, timing and the underlying error when one fails
+- **Wake-on-LAN MAC read from the TV itself** when you add it
 - Password login; settings and data survive updates
 
 ## Setup (local)
@@ -45,7 +47,7 @@ On the TV, enable IP control so gremote can talk to it:
 2. **Remote start = On** (needed for Wake-on-LAN from standby).
 3. Give the TV a **fixed IP (DHCP reservation)** in your router.
 
-Then in gremote: ⚙ → **Scan network** (or add by IP) → enter the PSK, and the MAC if you want Wake-on-LAN.
+Then in gremote: ⚙ → **Scan network** (or add by IP) → enter the PSK. The MAC for Wake-on-LAN is read from the TV automatically (leave it blank); use **Get MAC from TV** on a device later if it was missed.
 
 ## Configuration
 
@@ -133,6 +135,7 @@ Arrows · Enter = OK · Backspace/Esc = Back · H = Home · +/− = volume · M 
 | Scan finds nothing | Add the TV by IP. Discovery needs the server and TV on the same subnet. |
 | "Authentication failed" | The PSK doesn't match. Re-check it under the TV's IP control settings. |
 | Power On does nothing | Add the TV's *wired* MAC, and turn on *Remote start*. Use **Wake** for Wake-on-LAN. |
+| Something fails, reason unknown | Open the Debug log (top right). Each command shows the error and the underlying exception; **Copy** gives you text to paste. |
 | Status shows "unreachable" | The TV is in deep standby or the IP changed. Use a DHCP reservation. |
 | Apps list is empty | Some models don't expose it. Use Home, or send an IRCC name such as `Netflix`. |
 | Some buttons do nothing | Not every model supports every IRCC command. |
@@ -149,7 +152,9 @@ PUT    /api/devices/:id                   update a device
 DELETE /api/devices/:id
 GET    /api/devices/:id/status            power, volume, mute
 POST   /api/devices/:id/action {action, params?}
+POST   /api/devices/:id/fetch-mac        read the MAC from the TV and save it
 POST   /api/discovery/scan                scan for Sony TVs
+GET    /api/debug/log?after=N             recent events (DELETE clears)
 ```
 
 Actions: `power_on`, `power_off`, `toggle_power`, `wake`, `volume_up`, `volume_down`, `set_volume`, `toggle_mute`,

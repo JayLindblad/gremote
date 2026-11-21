@@ -97,25 +97,60 @@ class SonyBravia(DeviceDriver):
     def _send_wol(self) -> None:
         if not self.mac:
             raise DeviceError("No MAC address configured for Wake-on-LAN")
-        mac = self.mac.replace(":", "")
-        packet = bytes.fromhex("F" * 12 + mac * 16)
+        mac = normalize_mac(self.mac)
+        if not mac:
+            raise DeviceError(f"Invalid MAC address: {self.mac!r}")
+        packet = bytes.fromhex("F" * 12 + mac.replace(":", "") * 16)
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
             sock.sendto(packet, ("<broadcast>", 9))
 
     async def wake(self) -> dict:
         await asyncio.to_thread(self._send_wol)
-        return {"wake": "sent"}
+        return {"wake": "sent", "mac": normalize_mac(self.mac)}
+
+    # -- MAC address lookup -------------------------------------------------------
+
+    def _arp_lookup(self) -> str | None:
+        """Look the TV's IP up in the kernel ARP table (same L2 network only)."""
+        try:
+            with open("/proc/net/arp") as fh:
+                for line in fh.read().splitlines()[1:]:
+                    cols = line.split()
+                    if len(cols) >= 4 and cols[0] == self.host:
+                        mac = normalize_mac(cols[3])
+                        if mac and mac != "00:00:00:00:00:00":
+                            return mac
+        except OSError:
+            pass
+        return None
+
+    async def fetch_mac(self) -> str | None:
+        """Ask the TV for its MAC (preferring wired), else fall back to ARP."""
+        candidates: dict[str, str] = {}
+        info = await self._call(lambda c: c.get_system_info())
+        for key, value in (info or {}).items():
+            if "mac" in key.lower():
+                mac = normalize_mac(value)
+                if mac:
+                    candidates[key.lower()] = mac
+        # Wired MAC is what Wake-on-LAN needs; "macAddr" is Sony's wired field.
+        for key in ("macaddr", "wiredmac", "ethernetmac"):
+            if key in candidates:
+                return candidates[key]
+        if candidates:
+            return next(iter(candidates.values()))
+        return await asyncio.to_thread(self._arp_lookup)
 
     # -- public interface -------------------------------------------------------
 
     async def status(self) -> dict:
         try:
             power = await self._call(lambda c: c.get_power_status())
-        except DeviceError:
+        except DeviceError as exc:
             # A TV in deep standby is unreachable; report it as off rather than
-            # surfacing a connection error.
-            return {"power": "off", "volume": None, "mute": False}
+            # raising, but keep the reason so the debug log can show it.
+            return {"power": "off", "volume": None, "mute": False, "error": _reason(exc)}
         info: dict = {}
         if power == "active":
             try:
@@ -124,8 +159,8 @@ class SonyBravia(DeviceDriver):
                     "volume": _as_int(vol.get("volume")),
                     "mute": bool(vol.get("mute")),
                 }
-            except DeviceError:
-                info = {"volume": None, "mute": False}
+            except DeviceError as exc:
+                info = {"volume": None, "mute": False, "error": _reason(exc)}
         return {"power": power, **info}
 
     async def action(self, name: str, params: dict | None = None) -> dict:
@@ -134,6 +169,8 @@ class SonyBravia(DeviceDriver):
             return await self.status()
         if name == "wake":
             return await self.wake()
+        if name == "fetch_mac":
+            return {"mac": await self.fetch_mac()}
         if name == "power_on":
             return {"turned_on": await self._call(lambda c: c.turn_on())}
         if name == "power_off":
@@ -206,3 +243,17 @@ def _looks_b64(value: str) -> bool:
         return True
     except (binascii.Error, ValueError):
         return False
+
+
+def normalize_mac(value) -> str | None:
+    """Return 'aa:bb:cc:dd:ee:ff' for any common MAC spelling, else None."""
+    digits = "".join(ch for ch in str(value or "") if ch.isalnum()).lower()
+    if len(digits) != 12 or any(ch not in "0123456789abcdef" for ch in digits):
+        return None
+    return ":".join(digits[i:i + 2] for i in range(0, 12, 2))
+
+
+def _reason(exc: BaseException) -> str:
+    """Error text plus the underlying library exception, for the debug log."""
+    cause = exc.__cause__
+    return f"{exc} ({type(cause).__name__}: {cause})" if cause else str(exc)

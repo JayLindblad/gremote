@@ -182,7 +182,7 @@ async function run(action, params, { quiet = false } = {}) {
   const failed = results
     .map((r, i) => (r.status === 'rejected' && !(r.reason instanceof AuthError) ? `${list[i].name}: ${r.reason.message}` : null))
     .filter(Boolean);
-  if (failed.length && (!quiet || Date.now() - lastErrorAt > 2500)) toast(failed.join('\n'), true, 5000);
+  if (failed.length && (!quiet || Date.now() - lastErrorAt > 2500)) toast(failed.join('\n') + '\n(see Debug log)', true, 5000);
   if (failed.length) lastErrorAt = Date.now();
   if (['toggle_power', 'power_on', 'power_off', 'toggle_mute', 'set_volume'].includes(action)) {
     setTimeout(refreshStatus, 1500);
@@ -330,7 +330,7 @@ function renderDeviceList() {
     head.append(name, badge);
     const meta = document.createElement('div');
     meta.className = 'meta';
-    meta.textContent = d.host + (d.mac ? ` · ${d.mac}` : '');
+    meta.textContent = d.host + (d.mac ? ` · ${d.mac}` : " · no MAC (Wake-on-LAN off)");
     const actions = document.createElement('div');
     actions.className = 'actions';
     const del = document.createElement('button');
@@ -342,7 +342,20 @@ function renderDeviceList() {
       try { await api('DELETE', `/api/devices/${d.id}`); await loadDevices(); }
       catch (err) { toast(err.message, true); }
     });
-    actions.appendChild(del);
+    const macBtn = document.createElement("button");
+    macBtn.className = "btn small";
+    macBtn.type = "button";
+    macBtn.textContent = d.mac ? "Refresh MAC from TV" : "Get MAC from TV";
+    macBtn.addEventListener("click", async () => {
+      macBtn.disabled = true;
+      try {
+        const { device } = await api("POST", `/api/devices/${d.id}/fetch-mac`);
+        toast(`MAC: ${device.mac}`);
+        await loadDevices();
+      } catch (err) { if (!(err instanceof AuthError)) toast(err.message + " (see Debug log)", true, 5000); }
+      finally { macBtn.disabled = false; }
+    });
+    actions.append(macBtn, del);
     card.append(head, meta, actions);
     list.appendChild(card);
   });
@@ -365,7 +378,7 @@ async function addDevice(e) {
     selected = device.id;
     store.set('selectedDevice', device.id);
     await loadDevices();
-    toast(`Added ${device.name}`);
+    toast(device.mac ? `Added ${device.name} (MAC ${device.mac})` : `Added ${device.name}. MAC not detected; see Debug log`);
   } catch (err) {
     toast(err.message, true);
   }
@@ -462,3 +475,93 @@ document.addEventListener('DOMContentLoaded', async () => {
     await showApp();
   } catch { showLogin(); }
 });
+
+// ---------------------------------------------------------------- debug --
+let debugEntries = [];
+let debugLastId = 0;
+let debugTimer = null;
+let lastSeenErrorId = 0;
+
+const hhmmss = (ts) => new Date(ts * 1000).toLocaleTimeString([], { hour12: false });
+
+async function pollDebug() {
+  try {
+    const { entries } = await api('GET', `/api/debug/log?after=${debugLastId}`);
+    if (entries.length) {
+      debugEntries = debugEntries.concat(entries).slice(-500);
+      debugLastId = entries[entries.length - 1].id;
+    }
+  } catch { return; }
+  const newest = debugEntries.filter((e) => e.level === 'error').pop();
+  $('#openDebug').classList.toggle('has-errors', !!newest && newest.id > lastSeenErrorId);
+  if ($('#debug').open) renderDebug();
+}
+
+function renderDebug() {
+  const list = $('#dbgList');
+  const errorsOnly = $('#dbgErrorsOnly').checked;
+  const rows = debugEntries.filter((e) => !errorsOnly || e.level === 'error');
+  list.innerHTML = '';
+  if (!rows.length) {
+    list.innerHTML = '<p class="empty">Nothing logged yet. Try a command.</p>';
+    return;
+  }
+  rows.slice().reverse().forEach((e) => {
+    const row = document.createElement('div');
+    row.className = `dbg-row ${e.level}`;
+    const top = document.createElement('div');
+    top.className = 'top-line';
+    [hhmmss(e.ts), e.device, e.action, e.duration_ms != null ? `${e.duration_ms} ms` : null]
+      .filter(Boolean)
+      .forEach((t) => { const s = document.createElement('span'); s.textContent = t; top.appendChild(s); });
+    const msg = document.createElement('div');
+    msg.className = 'msg';
+    msg.textContent = e.message;
+    row.append(top, msg);
+    const extra = [e.params ? `params: ${JSON.stringify(e.params)}` : null, e.detail].filter(Boolean).join('\n');
+    if (extra) { const pre = document.createElement('pre'); pre.textContent = extra; row.appendChild(pre); }
+    list.appendChild(row);
+  });
+}
+
+function debugAsText() {
+  return debugEntries.map((e) =>
+    `${new Date(e.ts * 1000).toISOString()} ${e.level.toUpperCase()} ${e.device || '-'} ${e.action || '-'}` +
+    `${e.duration_ms != null ? ` (${e.duration_ms}ms)` : ''}: ${e.message}` +
+    `${e.params ? ` params=${JSON.stringify(e.params)}` : ''}${e.detail ? `\n    ${e.detail}` : ''}`).join('\n');
+}
+
+function wireDebug() {
+  $('#openDebug').addEventListener('click', async () => {
+    await pollDebug();
+    const last = debugEntries.filter((e) => e.level === 'error').pop();
+    if (last) lastSeenErrorId = last.id;
+    $('#openDebug').classList.remove('has-errors');
+    renderDebug();
+    $('#debug').showModal();
+  });
+  $('#closeDebug').addEventListener('click', () => $('#debug').close());
+  $('#dbgErrorsOnly').addEventListener('change', renderDebug);
+  $('#dbgClear').addEventListener('click', async () => {
+    try { await api('DELETE', '/api/debug/log'); } catch { /* ignore */ }
+    debugEntries = [];
+    renderDebug();
+  });
+  $('#dbgCopy').addEventListener('click', async () => {
+    const text = debugAsText();
+    try {
+      if (navigator.clipboard && window.isSecureContext) await navigator.clipboard.writeText(text);
+      else { // plain http on the LAN: the async clipboard API is blocked
+        const ta = document.createElement("textarea");
+        ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+        document.body.appendChild(ta); ta.select();
+        const ok = document.execCommand("copy");
+        ta.remove();
+        if (!ok) throw new Error("copy blocked");
+      }
+      toast("Copied");
+    } catch { toast("Copy failed; select the text manually", true); }
+  });
+  debugTimer = setInterval(() => { if (!$('#app').hidden && !document.hidden) pollDebug(); }, 3000);
+}
+document.addEventListener('DOMContentLoaded', wireDebug);

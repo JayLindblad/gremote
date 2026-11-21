@@ -10,11 +10,12 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import settings
 from .db import init_db
-from .routers import auth, devices, discovery
+from .routers import auth, debug, devices, discovery
 
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("gremote")
 
-STATIC_DIR =Path(__file__).resolve().parent / "static"
+STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
 @asynccontextmanager
@@ -33,6 +34,7 @@ app = FastAPI(title=settings.app_title, lifespan=lifespan)
 app.include_router(auth.router)
 app.include_router(devices.router)
 app.include_router(discovery.router)
+app.include_router(debug.router)
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 

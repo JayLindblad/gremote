@@ -187,7 +187,7 @@ dialog h3 { font-size: 14px; color: var(--muted); text-transform: uppercase; let
 .badge.good { color: var(--ok); }
 
 /* ---------- toast ---------- */
-.toast {
+.toast { white-space: pre-line;
   position: fixed; left: 50%; bottom: calc(20px + env(safe-area-inset-bottom)); transform: translate(-50%, 20px);
   background: var(--surface-3); color: var(--text); border: 1px solid var(--border);
   padding: 10px 16px; border-radius: 12px; max-width: calc(100vw - 32px);
@@ -218,3 +218,21 @@ select {
 .row.inputs { grid-template-columns: repeat(5, 1fr); gap: 6px; }
 .row.inputs .btn { padding: 0 4px; font-size: 13px; }
 .power-row .pill-group { flex-wrap: wrap; }
+
+/* ---------- debug window ---------- */
+.spacer { flex: 1; }
+.dbg-tools { display: flex; align-items: center; gap: 8px; margin: 10px 0; font-size: 14px; }
+.dbg-tools label { display: flex; align-items: center; gap: 6px; }
+.dbg-tools input { padding: 0; }
+.dbg-list { display: flex; flex-direction: column; gap: 6px; max-height: 55vh; overflow-y: auto; }
+.dbg-row {
+  border: 1px solid var(--border); border-left-width: 4px; border-radius: 10px;
+  background: var(--surface-2); padding: 8px 10px; font-size: 13px; word-break: break-word;
+}
+.dbg-row.error { border-left-color: var(--danger); }
+.dbg-row.warn { border-left-color: var(--warn); }
+.dbg-row.info { border-left-color: var(--ok); }
+.dbg-row .top-line { display: flex; gap: 8px; color: var(--muted); font-size: 12px; flex-wrap: wrap; }
+.dbg-row .msg { margin-top: 2px; }
+.dbg-row pre { margin: 6px 0 0; white-space: pre-wrap; color: var(--muted); font-size: 12px; font-family: ui-monospace, Menlo, Consolas, monospace; }
+.icon-btn.has-errors { border-color: var(--danger); color: var(--danger); }
