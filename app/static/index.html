@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>gremote</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <!-- Login -->
+  <div id="login" class="login-screen">
+    <form id="login-form" class="login-card">
+      <h1>gremote</h1>
+      <p class="muted">Home-network remote control</p>
+      <input id="password" type="password" placeholder="Password" autocomplete="current-password" autofocus />
+      <button type="submit">Sign in</button>
+      <div id="login-error" class="error"></div>
+    </form>
+  </div>
+
+  <!-- Dashboard -->
+  <div id="dashboard" class="dashboard" style="display: none">
+    <header class="topbar">
+      <h1>gremote</h1>
+      <div class="spacer"></div>
+      <button id="refresh-all" class="ghost">Refresh</button>
+      <button id="logout" class="ghost">Sign out</button>
+    </header>
+
+    <main>
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Add device</h2>
+          <button id="scan-network" type="button" class="ghost">Scan network</button>
+        </div>
+        <form id="add-form" class="add-form">
+          <input id="device-name" placeholder="Name (e.g. Living room TV)" required />
+          <select id="device-type"></select>
+          <input id="device-host" placeholder="IP address" required />
+          <input id="device-mac" placeholder="MAC (for Wake-on-LAN)" />
+          <input id="device-psk" placeholder="PSK (Sony TVs only)" />
+          <button type="submit">Add</button>
+        </form>
+        <div id="discovery-results"></div>
+      </section>
+
+      <section id="device-list" class="device-list"></section>
+    </main>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

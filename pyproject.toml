@@ -1,0 +1,27 @@
+[project]
+name = "gremote"
+version = "0.1.0"
+description = "Remote troubleshooting dashboard for home-network IP devices"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.2",
+    "python-multipart>=0.0.9",
+    "itsdangerous>=2.1",
+    "pybravia>=0.5.3",
+]
+
+[project.optional-dependencies]
+dev = ["ruff>=0.4", "pytest>=8.0"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"

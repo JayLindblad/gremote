@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+gremote.db
+gremote.db-journal
+gremote.db-wal
+node_modules/
+.DS_Store
+
+.tmp/
+vendor/
