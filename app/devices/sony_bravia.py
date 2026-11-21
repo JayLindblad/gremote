@@ -214,6 +214,18 @@ class SonyBravia(DeviceDriver):
         await collect("picture", "videoScreen", ("getPictureQualitySettings",), ("1.0",))
         await collect("sound", "audio", ("getSoundSettings", "getSpeakerSettings"), ("1.1", "1.0"))
 
+        # HDMI-control / remote-device options, where the model exposes them.
+        await collect("remote", "system", ("getRemoteDeviceSettings",), ("1.0",))
+
+        try:   # "Remote start" (Wake-on-LAN) on/off
+            res = await self._rpc("system", "getWolMode", [], "1.0")
+            if res and isinstance(res[0], dict) and "enabled" in res[0]:
+                items.append({"group": "system", "target": "wolMode", "kind": "toggle",
+                              "title": "Remote start (Wake-on-LAN)", "available": True,
+                              "value": "on" if res[0]["enabled"] else "off"})
+        except DeviceError as exc:
+            problems["wol"] = str(exc)
+
         try:
             res = await self._rpc("system", "getPowerSavingMode", [], "1.0")
             mode = res[0].get("mode") if res and isinstance(res[0], dict) else None
@@ -228,10 +240,13 @@ class SonyBravia(DeviceDriver):
     async def set_setting(self, params: dict) -> dict:
         group, target = params.get("group"), params.get("target")
         value = params.get("value")
-        if group not in ("picture", "sound", "system") or not target or value is None:
-            raise ValueError("set_setting needs group (picture|sound|system), target and value")
+        if group not in ("picture", "sound", "remote", "system") or not target or value is None:
+            raise ValueError("set_setting needs group (picture|sound|remote|system), target and value")
         value = str(value)
-        if group == "picture":
+        if group == "remote":
+            await self._rpc("system", "setRemoteDeviceSettings",
+                            [{"settings": [{"target": target, "value": value}]}], "1.0")
+        elif group == "picture":
             await self._rpc("videoScreen", "setPictureQualitySettings",
                             [{"settings": [{"target": target, "value": value}]}], "1.0")
         elif group == "sound":
@@ -241,9 +256,12 @@ class SonyBravia(DeviceDriver):
             except DeviceError:      # some models only have the "Speaker" variant
                 await self._rpc("audio", "setSpeakerSettings", body, "1.0")
         else:
-            if target != "powerSavingMode":
+            if target == "wolMode":
+                await self._rpc("system", "setWolMode", [{"enabled": value == "on"}], "1.0")
+            elif target == "powerSavingMode":
+                await self._rpc("system", "setPowerSavingMode", [{"mode": value}], "1.0")
+            else:
                 raise ValueError(f"Unknown system setting: {target}")
-            await self._rpc("system", "setPowerSavingMode", [{"mode": value}], "1.0")
         return {"ok": True, "group": group, "target": target, "value": value}
 
     # -- MAC address lookup -------------------------------------------------------

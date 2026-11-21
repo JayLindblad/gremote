@@ -694,7 +694,7 @@ function renderTvSettings(d, result) {
       group = s.group;
       const h = document.createElement('h4');
       h.className = 'set-group';
-      h.textContent = { picture: 'Picture', sound: 'Sound', system: 'System' }[group] || group;
+      h.textContent = { picture: 'Picture', sound: 'Sound', remote: 'HDMI / remote devices', system: 'System' }[group] || group;
       box.appendChild(h);
     }
     const row = document.createElement('div');
