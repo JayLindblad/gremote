@@ -220,6 +220,68 @@ async def scan_pages(host: str, port: int | None = None) -> dict:
         await session.__aexit__()
 
 
+# -- screen reader / accessibility services --------------------------------------------------
+# Turned-on accessibility services are listed in Settings.Secure, which ADB may read and write
+# on any Android TV. A screen reader is recognised by its name (Sony's ScreenReaderService,
+# Google's TalkBack, ...), so no model list is needed.
+_SCREEN_READER = re.compile(r"screen.?reader|talkback|marvin|spoken|voiceassistant|voice.?view",
+                            re.I)
+_SAFE_COMPONENT = re.compile(r"^[\w.]+/[\w.$]+$")
+
+
+def _service_name(component: str) -> str:
+    if re.search(r"talkback|marvin", component, re.I):
+        return "TalkBack"
+    if re.search(r"screen.?reader", component, re.I):
+        return "Screen reader"
+    cls = component.rsplit("/", 1)[-1].rsplit(".", 1)[-1]
+    return re.sub(r"Service$", "", cls) or component
+
+
+async def _accessibility(session) -> dict:
+    raw = (await session.shell("settings get secure enabled_accessibility_services")).strip()
+    on = (await session.shell("settings get secure accessibility_enabled")).strip() == "1"
+    services = [c for c in raw.split(":") if c and c != "null"]
+    listed = [{"component": c, "name": _service_name(c),
+               "screen_reader": bool(_SCREEN_READER.search(c))} for c in services]
+    return {"enabled": on and bool(services), "services": listed,
+            "screen_reader_on": on and any(s["screen_reader"] for s in listed)}
+
+
+async def accessibility_status(host: str, port: int | None = None) -> dict:
+    """Which accessibility services (e.g. a screen reader) are turned on."""
+    session = await connect_any(host, port)
+    try:
+        return await _accessibility(session)
+    finally:
+        await session.__aexit__()
+
+
+async def screen_reader_off(host: str, everything: bool = False, port: int | None = None) -> dict:
+    """Turn off the screen reader (or every accessibility service), then report the new state."""
+    session = await connect_any(host, port)
+    try:
+        before = await _accessibility(session)
+        keep = [s["component"] for s in before["services"]
+                if not everything and not s["screen_reader"]]
+        if any(not _SAFE_COMPONENT.match(c) for c in keep):
+            raise DeviceError("Unexpected accessibility service name on the TV")
+        if keep:
+            await session.shell("settings put secure enabled_accessibility_services '"
+                                + ":".join(keep) + "'")
+        else:
+            await session.shell("settings put secure enabled_accessibility_services ''")
+            await session.shell("settings put secure accessibility_enabled 0")
+        after = await _accessibility(session)
+        if after["screen_reader_on"] or (everything and after["enabled"]):
+            raise DeviceError("The TV kept its screen reader on; turn it off in Settings > "
+                              "Accessibility")
+        turned_off = [s["name"] for s in before["services"] if s["component"] not in keep]
+        return {**after, "turned_off": turned_off}
+    finally:
+        await session.__aexit__()
+
+
 async def list_activities(host: str, port: int | None = None) -> dict:
     """Activities of the TV's Settings packages, to find the right page to open."""
     session = await connect_any(host, port)

@@ -150,6 +150,8 @@ function renderRemote() {
   applyPagesSupport();
   loadCommands();
   loadInputs();
+  renderScreenReader();
+  checkScreenReader();
   if ($('#tvSettingsPanel').open || $('#allCommandsPanel').open) autoScanPages();
 }
 
@@ -560,6 +562,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   wireRemote();
   wireKeyboard();
   setInterval(() => { if (!$('#app').hidden && !document.hidden) refreshStatus(); }, 20000);
+  setInterval(() => { if (!$('#app').hidden && !document.hidden) checkScreenReader(); }, 120000);
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && !$('#app').hidden) checkScreenReader();
+  });
+  $('#a11yOff').addEventListener('click', screenReaderOff);
+  $('#a11yCheck').addEventListener('click', () => checkScreenReader({ quiet: false }));
 
   try {
     await api('GET', '/api/auth/me');
@@ -1163,6 +1171,60 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#showMethods').addEventListener('click', showMethods);
   $('#openTvSettingsApp').addEventListener('click', () => run('launch_app', { title: 'Settings' }));
 });
+
+// ------------------------------------------------------- screen reader --
+// A held Mute button can switch a TV's screen reader on by accident. Check (over ADB) when a
+// TV is selected and every 2 minutes, show a banner while it is on, and turn it off in one tap.
+const a11yState = {};   // id -> last accessibility status
+let a11yBusy = false;
+
+async function checkScreenReader({ quiet = true } = {}) {
+  const d = currentDevice();
+  if (!d || selected === ALL || d.type !== 'sony_bravia' || a11yBusy) return;
+  a11yBusy = true;
+  try {
+    const { result } = await api('POST', `/api/devices/${d.id}/action`, { action: 'accessibility' });
+    a11yState[d.id] = result;
+    if (!quiet) {
+      toast(result.screen_reader_on ? 'The screen reader is ON'
+        : result.enabled ? `Screen reader is off (on: ${result.services.map((s) => s.name).join(', ')})`
+          : 'Screen reader is off');
+    }
+  } catch (err) {
+    if (!quiet && !(err instanceof AuthError)) toast(`Could not check: ${err.message}`, true);
+  } finally {
+    a11yBusy = false;
+    renderScreenReader();
+  }
+}
+
+function renderScreenReader() {
+  const d = currentDevice();
+  const st = d && selected !== ALL ? a11yState[d.id] : null;
+  const on = !!(st && st.screen_reader_on);
+  $('#a11yBanner').hidden = !on;
+  if (on) {
+    const names = st.services.filter((s) => s.screen_reader).map((s) => s.name).join(', ');
+    $('#a11yText').textContent = `${names || 'The screen reader'} is on for ${d.name}.`;
+  }
+}
+
+async function screenReaderOff() {
+  const d = currentDevice();
+  if (!d) return;
+  const btn = $('#a11yOff');
+  btn.disabled = true;
+  try {
+    const { result } = await api('POST', `/api/devices/${d.id}/action`, { action: 'screen_reader_off' });
+    a11yState[d.id] = result;
+    toast(`Turned off: ${(result.turned_off || []).join(', ') || 'screen reader'}`);
+  } catch (err) {
+    if (!(err instanceof AuthError)) toast(err.message, true, 6000);
+  } finally {
+    btn.disabled = false;
+    renderScreenReader();
+  }
+}
 
 // --------------------------------------------------------------- inputs --
 // Each TV reports its own inputs (number of HDMI ports, their names, composite, screen

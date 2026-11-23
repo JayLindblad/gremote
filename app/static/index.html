@@ -37,6 +37,10 @@
     </header>
 
     <div class="status" id="statusBar"></div>
+    <div class="a11y-banner" id="a11yBanner" role="alert" hidden>
+      <span id="a11yText">The screen reader is on.</span>
+      <button class="btn small" id="a11yOff" type="button">Turn it off</button>
+    </div>
 
     <main class="remote" id="remote">
       <div class="remote-col">
@@ -141,6 +145,7 @@
           <button class="link" id="loadTvSettings">Load settings from TV</button>
           <button class="link" id="openTvSettingsApp">Open the TV's Settings app</button>
           <button class="link" id="showMethods">What does my TV expose?</button>
+          <button class="link" id="a11yCheck">Check screen reader</button>
         </div>
         <pre class="note" id="methodsOut" hidden></pre>
         <h4 class="set-group">Advanced (ADB)</h4>

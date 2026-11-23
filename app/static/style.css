@@ -73,6 +73,14 @@ input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
   max-width: 420px; margin: 0 auto; padding: 0 16px; min-height: 22px;
   color: var(--muted); font-size: 13px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
 }
+.a11y-banner {
+  max-width: 420px; margin: 8px auto 0; padding: 10px 12px 10px 16px; border-radius: 12px;
+  background: var(--danger); color: #fff; font-weight: 600;
+  display: flex; gap: 12px; align-items: center; justify-content: space-between;
+}
+.a11y-banner[hidden] { display: none; }
+.a11y-banner .btn { background: #fff; color: #b3161b; border-color: #fff; flex-shrink: 0; }
+@media (min-width: 900px) { .a11y-banner { max-width: 1120px; } }
 .status .pair-btn { color: var(--accent); background: none; border: 0; padding: 0; font-weight: 600; }
 
 /* ---------- remote ---------- */

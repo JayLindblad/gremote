@@ -375,6 +375,10 @@ class SonyBravia(DeviceDriver):
         if name == "adb_scan_pages":
             port = params.get("port")
             return await adb.scan_pages(self.host, int(port) if port else None)
+        if name == "accessibility":
+            return await adb.accessibility_status(self.host)
+        if name == "screen_reader_off":
+            return await adb.screen_reader_off(self.host, bool(params.get("all")))
         if name == "adb_activities":
             port = params.get("port")
             return await adb.list_activities(self.host, int(port) if port else None)
