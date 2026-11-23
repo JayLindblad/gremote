@@ -12,6 +12,7 @@ replies, and enrich each with a best-effort fetch of its LOCATION XML.
 
 import asyncio
 import ipaddress
+import os
 import re
 import socket
 import time
@@ -126,38 +127,108 @@ def _local_ip() -> str | None:
         sock.close()
 
 
-def _sweep_hosts() -> list[str]:
-    """Addresses to probe: GREMOTE_SCAN_SUBNET (comma-separated CIDRs) or our own /24."""
-    own = _local_ip()
+def _in_docker() -> bool:
+    return os.path.exists("/.dockerenv")
+
+
+def _saved_device_subnets() -> list[str]:
+    """The /24 around every device already added (by IP)."""
+    try:
+        from . import db
+        hosts = [d.get("host") for d in db.list_devices()]
+    except Exception:
+        return []
+    out: list[str] = []
+    for host in hosts:
+        try:
+            net = str(ipaddress.ip_network(f"{host}/24", strict=False))
+        except ValueError:
+            continue
+        if net not in out:
+            out.append(net)
+    return out
+
+
+def sweep_subnets() -> list[str]:
+    """What the sweep probes: GREMOTE_SCAN_SUBNET (comma-separated CIDRs) or our own /24.
+
+    Inside Docker (e.g. Docker Desktop on a Mac, bridge network) our own /24 is Docker's
+    internal network, not the LAN, so the subnets of devices already added are swept too.
+    """
     cidrs = [c.strip() for c in settings.scan_subnet.split(",") if c.strip()]
-    if not cidrs and own:
-        cidrs = [f"{own}/24"]
+    if cidrs:
+        return cidrs
+    own = _local_ip()
+    if own:
+        cidrs.append(str(ipaddress.ip_network(f"{own}/24", strict=False)))
+    if _in_docker():
+        cidrs += [c for c in _saved_device_subnets() if c not in cidrs]
+    return cidrs
+
+
+def _sweep_hosts() -> list[str]:
+    own = _local_ip()
     hosts: list[str] = []
-    for cidr in cidrs:
+    for cidr in sweep_subnets():
         try:
             net = ipaddress.ip_network(cidr, strict=False)
         except ValueError:
             continue
-        hosts.extend(str(h) for h in net.hosts() if str(h) != own)
+        hosts.extend(str(h) for h in net.hosts() if str(h) != own and str(h) not in hosts)
     return hosts[:MAX_SWEEP_HOSTS]
 
 
-async def _probe(session: aiohttp.ClientSession, sem: asyncio.Semaphore, host: str) -> dict | None:
+# Connect timed out (as opposed to refused / no answer): worth one more try.
+_CONNECT_TIMEOUT = getattr(aiohttp, "ConnectionTimeoutError", aiohttp.ServerTimeoutError)
+RETRY = object()
+
+
+async def _probe(session: aiohttp.ClientSession, sem: asyncio.Semaphore, host: str):
     """Sony's getInterfaceInformation is public (no PSK) and answers on port 80."""
     async with sem:
         try:
             async with session.post(f"http://{host}/sony/system", json=SWEEP_PAYLOAD,
                                     allow_redirects=False) as resp:
-                if resp.status != 200:
+                if resp.status not in (200, 404):
                     return None   # e.g. an Aruba AP's 302 captive-portal page
                 data = await resp.json(content_type=None)
+        except _CONNECT_TIMEOUT:
+            return RETRY
         except (aiohttp.ClientError, asyncio.TimeoutError, OSError, ValueError):
+            return None
+        if _is_sony_error(data):
+            # Sony's API server is there but not answering (TV in standby, or IP control
+            # off): still a TV. Its Cast description (port 8008) carries the name.
+            cast = await _cast_description(session, host)
+            if cast.get("manufacturer", "").lower().startswith("sony") or not cast:
+                return {"host": host, "model": cast.get("friendlyName"),
+                        "product": cast.get("modelName"), "asleep": True}
             return None
     result = data.get("result") if isinstance(data, dict) else None
     info = result[0] if isinstance(result, list) and result and isinstance(result[0], dict) else None
     if not info or not (info.get("modelName") or info.get("productName")):
         return None
     return {"host": host, "model": info.get("modelName"), "product": info.get("productName")}
+
+
+def _is_sony_error(data) -> bool:
+    """Sony's ScalarWebAPI error shape: {"error": [code, "message"], ...}."""
+    err = data.get("error") if isinstance(data, dict) else None
+    return isinstance(err, list) and len(err) == 2 and isinstance(err[0], int)
+
+
+async def _cast_description(session: aiohttp.ClientSession, host: str) -> dict:
+    try:
+        async with session.get(f"http://{host}:8008/ssdp/device-desc.xml") as resp:
+            xml = await resp.text() if resp.status == 200 else ""
+    except (aiohttp.ClientError, asyncio.TimeoutError, OSError, ValueError):
+        return {}
+    out: dict = {}
+    for tag in _XML_TAGS:
+        m = re.search(r"<" + tag + r"[^>]*>\s*(.*?)\s*</" + tag + r">", xml, re.S | re.I)
+        if m:
+            out[tag] = m.group(1).strip()
+    return out
 
 
 async def _sweep() -> list[dict]:
@@ -168,7 +239,13 @@ async def _sweep() -> list[dict]:
     timeout = aiohttp.ClientTimeout(total=2.0, connect=1.0)
     async with aiohttp.ClientSession(timeout=timeout) as session:
         found = await asyncio.gather(*(_probe(session, sem, h) for h in hosts))
-    return [f for f in found if f]
+        if _in_docker():
+            # Docker Desktop's NAT drops some of a burst of connections, the TV's included;
+            # give those addresses a second, gentler pass.
+            again = [h for h, f in zip(hosts, found) if f is RETRY]
+            sem = asyncio.Semaphore(SWEEP_CONCURRENCY // 2)
+            found += await asyncio.gather(*(_probe(session, sem, h) for h in again))
+    return [f for f in found if f and f is not RETRY]
 
 
 async def _ssdp(timeout: float) -> list[dict]:
@@ -224,6 +301,9 @@ async def discover_sony_tvs(timeout: float = 4.0) -> list[dict]:
                     "location": None,
                     "found_by": ["sweep"],
                 }
+            if s.get("asleep"):
+                merged[s["host"]]["note"] = ("Not answering yet: turn the TV on and check "
+                                             "IP control is enabled")
     if isinstance(ssdp_results, BaseException) and isinstance(sweep_results, BaseException):
         raise ssdp_results
     return sorted(merged.values(), key=lambda d: tuple(int(p) if p.isdigit() else 0

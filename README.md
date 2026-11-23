@@ -119,16 +119,39 @@ logs via `journalctl -u gremote -f`, and data in `/var/lib/gremote/`.
 **Already have a Debian/Ubuntu LXC or VM?** Run `bash deploy/install.sh` as root. It sets up the same service
 (without Tailscale).
 
-## Docker
+## Docker (Mac or Linux)
+
+One command, run on the machine with Docker (Docker Desktop on a Mac, or Docker on Linux), installs gremote
+as a container that starts with Docker. A secret key and dashboard password are generated for you.
 
 ```bash
-cp .env.example .env     # set your secrets
-docker compose up -d --build
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/JayLindblad/gremote/main/deploy/docker.sh)"
 ```
 
-This uses **host networking**, which discovery and Wake-on-LAN need. Data is kept in the `gremote-data` volume.
-Docker Desktop on Mac/Windows doesn't support host networking properly, so scanning and Wake-on-LAN won't work
-there. Add devices by IP instead, or run it on a Linux machine.
+Or from a clone of the repo: `bash deploy/docker.sh` (builds that copy as it is). It prints the address when it
+finishes, e.g. `http://localhost:8000`.
+
+To **update** later, open the container's shell and run `update`, just like in the LXC:
+
+```bash
+docker exec -it gremote bash     # then: update
+docker exec -it gremote update   # or in one go
+```
+
+Running the install command again also updates (it rebuilds the image from the latest code). Your devices,
+PSKs, ADB key and settings are kept in the `gremote-data` volume either way.
+
+Settings live in `/data/gremote.env` inside the container (run `docker restart gremote` after editing),
+logs via `docker logs -f gremote`. Settings: `PORT=8080`, `GREMOTE_PASSWORD=...` and
+`GREMOTE_SCAN_SUBNET=192.168.1.0/24` can be put in front of the command, as with the LXC script.
+
+**Docker Desktop on a Mac** runs containers behind a NAT, so the installer looks up your Mac's network (e.g.
+`10.0.0.0/24`) and tells the TV scan to sweep it; the scan also checks the subnets of TVs you've already added.
+If your Mac moves to another network, run the install command again. Wake-on-LAN broadcasts can't leave Docker
+Desktop, so power on with the TV's API (keep **Remote start** on).
+**On Linux** the container uses host networking, so discovery and Wake-on-LAN work as in the LXC.
+
+`docker compose up -d --build` (with a `.env` from `.env.example`) still works on Linux as well.
 
 ## Keyboard shortcuts (desktop)
 

@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Query
 
 from .. import debuglog
 from ..auth import require_auth
-from ..discovery import discover_sony_tvs
+from ..discovery import discover_sony_tvs, sweep_subnets
 
 router = APIRouter(
     prefix="/api/discovery",
@@ -26,7 +26,8 @@ async def scan(timeout: float = Query(default=4.0, ge=1.0, le=15.0)):
         raise
     debuglog.record(f"Found {len(devices)} Sony TV(s)" + (
         ": " + ", ".join(f'{d["host"]} ({"+".join(d.get("found_by", []))})' for d in devices) if devices else
-        " (check IP control is on and the container shares the TV's network/VLAN)"),
+        f" (swept {', '.join(sweep_subnets()) or 'nothing'}; check IP control is on, and set "
+        "GREMOTE_SCAN_SUBNET if the TV is on another subnet)"),
         level="info" if devices else "warn", kind="scan", action="scan",
         duration_ms=int((time.monotonic() - started) * 1000))
     return {"devices": devices}

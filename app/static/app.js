@@ -496,7 +496,7 @@ async function scanNetwork() {
       head.append(name, use);
       const meta = document.createElement('div');
       meta.className = 'meta';
-      meta.textContent = dev.host + (dev.model ? ` · ${dev.model}` : '');
+      meta.textContent = dev.host + (dev.model ? ` · ${dev.model}` : '') + (dev.note ? ` · ${dev.note}` : '');
       card.append(head, meta);
       out.appendChild(card);
     });
