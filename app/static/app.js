@@ -152,6 +152,7 @@ function renderRemote() {
   loadInputs();
   renderScreenReader();
   checkScreenReader();
+  autoLoadApps();
   if ($('#tvSettingsPanel').open || $('#allCommandsPanel').open) autoScanPages();
 }
 
@@ -289,7 +290,7 @@ function wireRemote() {
     if (v) { ircc(v); $('#keyInput').value = ''; }
   });
 
-  $('#loadApps').addEventListener('click', loadApps);
+  $('#loadApps').addEventListener('click', () => loadApps());
 }
 
 // ----------------------------------------------------------------- apps --
@@ -301,7 +302,9 @@ function renderApps() {
   if (!apps.length) {
     const p = document.createElement('p');
     p.className = 'empty';
-    p.textContent = selected === ALL ? 'Select a single device to see its apps.' : 'No apps loaded yet.';
+    p.textContent = selected === ALL ? 'Select a single device to see its apps.'
+      : d && appsLoading.has(d.id) ? 'Loading apps from the TV…'
+        : 'No apps loaded yet (they load when the TV is on).';
     box.appendChild(p);
     return;
   }
@@ -315,17 +318,41 @@ function renderApps() {
   });
 }
 
-async function loadApps() {
+// Apps load by themselves when a TV is selected or added (and again on the next status
+// check if the TV was off), and are remembered in this browser so they show at once next time.
+const appsLoading = new Set();
+const appsFresh = new Set();     // loaded from the TV during this visit
+
+async function loadApps({ quiet = false } = {}) {
   const d = currentDevice();
-  if (!d) { toast('Select a single device first', true); return; }
+  if (!d || selected === ALL) { if (!quiet) toast('Select a single device first', true); return; }
+  if (appsLoading.has(d.id)) return;
+  appsLoading.add(d.id);
+  renderApps();
   try {
     const data = await api('POST', `/api/devices/${d.id}/action`, { action: 'apps' });
-    appsCache[d.id] = (data.result && data.result.apps) || [];
-    renderApps();
-    if (!appsCache[d.id].length) toast('The TV returned no apps', true);
+    const apps = (data.result && data.result.apps) || [];
+    if (apps.length || !quiet) appsCache[d.id] = apps;
+    if (apps.length) {
+      appsFresh.add(d.id);
+      store.set(`apps:${d.id}`, JSON.stringify(apps.map(({ title, uri }) => ({ title, uri }))));
+    }
+    if (!apps.length && !quiet) toast('The TV returned no apps', true);
   } catch (err) {
-    if (!(err instanceof AuthError)) toast(err.message, true);
+    if (!quiet && !(err instanceof AuthError)) toast(err.message, true);
+  } finally {
+    appsLoading.delete(d.id);
+    if (currentDevice() && currentDevice().id === d.id) renderApps();
   }
+}
+
+function autoLoadApps() {
+  const d = currentDevice();
+  if (!d || selected === ALL || d.type !== 'sony_bravia' || appsFresh.has(d.id)) return;
+  if (!appsCache[d.id]) {
+    try { appsCache[d.id] = JSON.parse(store.get(`apps:${d.id}`) || 'null') || undefined; } catch { /* ignore */ }
+  }
+  loadApps({ quiet: true });
 }
 
 // ------------------------------------------------------------- settings --
@@ -561,7 +588,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   $('#closeSettings').addEventListener('click', () => $('#settings').close());
   wireRemote();
   wireKeyboard();
-  setInterval(() => { if (!$('#app').hidden && !document.hidden) refreshStatus(); }, 20000);
+  setInterval(() => {
+    if (!$('#app').hidden && !document.hidden) { refreshStatus(); autoLoadApps(); }
+  }, 20000);
   setInterval(() => { if (!$('#app').hidden && !document.hidden) checkScreenReader(); }, 120000);
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden && !$('#app').hidden) checkScreenReader();
