@@ -288,8 +288,9 @@ async def screen_reader_off(host: str, everything: bool = False, port: int | Non
 # (android/messenger) and starts it with the message. It draws over whatever is playing,
 # which needs the "display over other apps" app-op, granted here over ADB.
 MESSENGER_PKG = "com.gremote.messenger"
-MESSENGER_VERSION = 1          # = android:versionCode in android/messenger/AndroidManifest.xml
 MESSENGER_APK = Path(__file__).with_name("gremote-messenger.apk")
+# Written by android/messenger/build-in-docker.sh alongside the APK (its android:versionCode).
+MESSENGER_VERSION = int(Path(__file__).with_name("gremote-messenger.version").read_text())
 MESSAGE_MAX = 500
 _REMOTE_APK = "/data/local/tmp/gremote-messenger.apk"
 

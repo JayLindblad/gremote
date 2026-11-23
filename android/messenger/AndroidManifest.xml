@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- gremote TV messenger: shows text sent from gremote over ADB on top of whatever is playing.
-     versionCode must go up whenever the Java source changes, so gremote reinstalls it. -->
+     versionCode is raised by build-in-docker.sh on every build; don't edit it by hand. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.gremote.messenger"
-    android:versionCode="1"
-    android:versionName="1">
+    android:versionCode="2"
+    android:versionName="2">
 
     <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="28" />
 
