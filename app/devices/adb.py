@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 
 from ..config import settings
+from . import android_pages
 from .base import DeviceError
 
 ADB_PORT = 5555
@@ -177,77 +178,27 @@ async def device_info(host: str, port: int | None = None) -> dict:
         await session.__aexit__()
 
 
-# -- Settings shortcuts ----------------------------------------------------------------
-# key -> candidates, tried in order: an intent action, or a component (package/.Activity).
-# Sony's own pages come first where they exist (e.g. Android TV 9 BRAVIAs such as the A1E);
-# the generic Android actions cover Google TV. Pages a TV lacks are hidden by supported_pages.
-_SONY_TV_SETTINGS = "com.android.tv.settings/com.sony.dtv.settings."
-SETTINGS_PAGES: dict[str, list[str]] = {
-    "settings": ["android.settings.SETTINGS"],
-    "network": ["android.settings.WIFI_SETTINGS"],
-    "display": ["android.settings.DISPLAY_SETTINGS", "com.sony.dtv.base.screensettings"],
-    "picture": ["com.sony.dtv.base.picturesettings"],
-    "sound": ["android.settings.SOUND_SETTINGS"],
-    "sony_sound": ["com.sony.dtv.base.soundsettings"],
-    "speakers": ["com.sony.dtv.settings.intent.action.SPEAKERS_SETTINGS"],
-    "inputs": [_SONY_TV_SETTINGS + "externalinputs.ExternalInputsActivity"],
-    "remote_start": ["com.sony.dtv.networksettings/.RemoteStartActivity"],
-    "power": [_SONY_TV_SETTINGS + "power.EcoActivity"],
-    "apps": ["android.settings.APPLICATION_SETTINGS"],
-    "accessibility": ["android.settings.ACCESSIBILITY_SETTINGS"],
-    "bluetooth": ["android.settings.BLUETOOTH_SETTINGS",
-                  "com.google.android.intent.action.CONNECT_INPUT"],
-    "datetime": ["android.settings.DATE_SETTINGS"],
-    "language": ["android.settings.LOCALE_SETTINGS"],
-    "keyboard": ["android.settings.INPUT_METHOD_SETTINGS"],
-    "storage": ["android.settings.INTERNAL_STORAGE_SETTINGS"],
-    "privacy": ["android.settings.PRIVACY_SETTINGS"],
-    "location": ["android.settings.LOCATION_SOURCE_SETTINGS"],
-    "about": [_SONY_TV_SETTINGS + "about.AboutActivity", "android.settings.DEVICE_INFO_SETTINGS"],
-    "developer": ["android.settings.APPLICATION_DEVELOPMENT_SETTINGS"],
-}
-# Some TVs route a standard action to an unrelated page; such a match does not count.
-# (Sony Android TV 9 sends DEVICE_INFO_SETTINGS to External inputs.)
-WRONG_TARGET = {"about": re.compile(r"ExternalInputs", re.I)}
-
+# -- Settings pages ------------------------------------------------------------------------
+# Which pages a TV has is worked out on the TV itself by android_pages.scan (no per-model
+# lists). Without a scan, a shortcut falls back to its standard Android actions.
+SETTINGS_PAGES = {key: actions for key, (actions, _) in android_pages.SHORTCUTS.items()}
 _SAFE_INTENT = re.compile(r"^[A-Za-z0-9_.:/$-]{3,200}$")
-
-
-def _flag(target: str) -> str:
-    return "-n" if "/" in target else "-a"   # component (pkg/.Activity) or action
-
-
-async def _resolve(session, target: str) -> str | None:
-    """The activity the TV would open for this action/component, or None."""
-    out = await session.shell(f"cmd package resolve-activity --brief {_flag(target)} {target}")
-    if "no activity found" in out.lower():
-        return None
-    last = out.strip().splitlines()[-1].strip() if out.strip() else ""
-    return last if "/" in last and " " not in last else None
-
-
-async def _usable(session, page: str | None, target: str) -> str | None:
-    resolved = await _resolve(session, target)
-    wrong = WRONG_TARGET.get(page or "")
-    if resolved and wrong and wrong.search(resolved):
-        return None
-    return resolved
 
 
 async def open_settings(host: str, page: str | None = None, intent: str | None = None,
                         port: int | None = None) -> dict:
-    """Open a Settings page on the TV by shortcut key or a custom intent action/component."""
-    targets = SETTINGS_PAGES.get(page or "") or ([intent] if intent else [])
+    """Open a Settings page on the TV by a target from the scan, a shortcut key or an action."""
+    targets = [intent] if intent else SETTINGS_PAGES.get(page or "", [])
     if not targets or not all(_SAFE_INTENT.match(t) for t in targets):
         raise ValueError("Unknown settings page, or invalid intent action")
     session = await connect_any(host, port)
     errors = []
     try:
         for target in targets:
-            if page and not await _usable(session, page, target):
+            if not intent and not await android_pages.usable(session, target):
                 errors.append(f"{target}: not on this TV")
                 continue
-            out = await session.shell(f"am start {_flag(target)} {target}")
+            out = await session.shell(f"am start {android_pages._flag(target)} '{target}'")
             lowered = out.lower()
             if "error" in lowered or "unable to resolve" in lowered or "exception" in lowered:
                 errors.append(f"{target}: {out[:300]}")
@@ -256,6 +207,17 @@ async def open_settings(host: str, page: str | None = None, intent: str | None =
     finally:
         await session.__aexit__()
     raise DeviceError("TV could not open " + "; ".join(errors))
+
+
+async def scan_pages(host: str, port: int | None = None) -> dict:
+    """Which shortcuts work on this TV (and what each opens), plus every other Settings page."""
+    session = await connect_any(host, port)
+    try:
+        result = await android_pages.scan(session)
+        result["adb_port"] = session.port
+        return result
+    finally:
+        await session.__aexit__()
 
 
 async def list_activities(host: str, port: int | None = None) -> dict:
@@ -490,19 +452,3 @@ async def benchmark(host: str, port: int | None = None) -> dict:
         await session.__aexit__()
     server = {t: shutil.which(t) for t in ("adb", "ffmpeg")}
     return {"steps": steps, "server_tools": server, "adb_port": session.port}
-
-
-async def supported_pages(host: str, port: int | None = None) -> dict:
-    """Which Settings shortcuts this TV can actually resolve (differs per model/vendor)."""
-    session = await connect_any(host, port)
-    try:
-        result = {}
-        for key, targets in SETTINGS_PAGES.items():
-            result[key] = False
-            for target in targets:
-                if await _usable(session, key, target):
-                    result[key] = True
-                    break
-        return {"pages": result, "adb_port": session.port}
-    finally:
-        await session.__aexit__()

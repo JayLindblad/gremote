@@ -228,7 +228,8 @@ select {
 .vol-wrap { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
 .vol-wrap input[type="range"] { flex: 1; padding: 0; accent-color: var(--accent); }
 .vol-wrap output { min-width: 2.2em; text-align: right; color: var(--muted); font-size: 14px; }
-.row.inputs { grid-template-columns: repeat(5, 1fr); gap: 6px; }
+.row.inputs { grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 6px; }
+.row.inputs .btn.dim { opacity: 0.55; }
 .row.inputs .btn { padding: 0 4px; font-size: 13px; }
 .power-row .pill-group { flex-wrap: wrap; }
 

@@ -160,11 +160,28 @@ async def fetch_mac(device_id: str):
     return {"device": _public(device)}
 
 
+@router.post("/{device_id}/scan-pages")
+async def scan_pages(device_id: str):
+    """Ask the TV (over ADB) which Settings pages it has, and remember the answer."""
+    device = _require_device(device_id)
+    result = await _run(device, "adb_scan_pages", None,
+                        lambda: driver_for(device).action("adb_scan_pages", {}))
+    config = {**device["config"], "settings_pages": {
+        "pages": result.get("pages", []), "targets": result.get("targets", {}),
+        "extra": result.get("extra", []),
+        "checked": int(time.time())}}
+    device = upsert_device(device_id, name=device["name"], type=device["type"],
+                           host=device["host"], mac=device.get("mac"), config=config)
+    return {"device": _public(device)}
+
+
 @router.put("/{device_id}")
 async def update(device_id: str, body: DeviceIn):
     existing = _require_device(device_id)
     # Blank config values (e.g. an empty PSK field) mean "keep what is stored".
     config = {**existing["config"], **{k: v for k, v in body.config.items() if v not in (None, "")}}
+    if body.host.strip() != existing["host"]:
+        config.pop("settings_pages", None)     # another TV: check its pages again
     mac = body.mac.strip() if body.mac and body.mac.strip() else None
     device = upsert_device(
         device_id,

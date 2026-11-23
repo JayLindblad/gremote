@@ -14,6 +14,8 @@ const statusCache = {};   // id -> last status dict
 const appsCache = {};     // id -> apps from the TV
 const commandsCache = {}; // id -> IRCC command names the TV supports
 const commandsRequested = new Set();
+const inputsCache = {};   // id -> inputs the TV reports [{uri, title, connected}]
+const inputsRequested = new Set();
 
 // ------------------------------------------------------------------ api --
 class AuthError extends Error {}
@@ -144,8 +146,11 @@ function renderRemote() {
   $('#remote').classList.toggle('disabled', !selected);
   renderApps();
   renderCommands();
+  renderInputs();
   applyPagesSupport();
   loadCommands();
+  loadInputs();
+  if ($('#tvSettingsPanel').open || $('#allCommandsPanel').open) autoScanPages();
 }
 
 // --------------------------------------------------------------- status --
@@ -259,8 +264,14 @@ function wireRemote() {
     const action = el.dataset.action;
     onTap(el, () => (action === 'power_on' ? powerOn() : run(action)));
   });
-  document.querySelectorAll('#remote [data-input]').forEach((el) => {
-    onTap(el, () => run('set_input', { input: el.dataset.input }));
+  // Input buttons are rebuilt per TV (renderInputs), so listen on their container.
+  const inputsRow = $('#inputButtons');
+  defaultInputsHtml = inputsRow.innerHTML;
+  inputsRow.addEventListener('click', (e) => {
+    const el = e.target.closest('[data-uri], [data-input]');
+    if (!el) return;
+    buzz();
+    run('set_input', el.dataset.uri ? { uri: el.dataset.uri } : { input: el.dataset.input });
   });
 
   let volTimer;
@@ -428,6 +439,8 @@ function buildEditForm(d) {
       await api('PUT', `/api/devices/${d.id}`, body);
       delete commandsCache[d.id];
       commandsRequested.delete(d.id);
+      delete inputsCache[d.id];
+      inputsRequested.delete(d.id);
       toast(`Saved ${body.name}`);
       await loadDevices();
     } catch (err) {
@@ -456,6 +469,7 @@ async function addDevice(e) {
     store.set('selectedDevice', device.id);
     await loadDevices();
     toast(device.mac ? `Added ${device.name} (MAC ${device.mac})` : `Added ${device.name}. MAC not detected; see Debug log`);
+    if (device.type === 'sony_bravia') scanPages(currentDevice() || device, { quiet: true });
   } catch (err) {
     toast(err.message, true);
   }
@@ -786,7 +800,7 @@ async function openSettingsPage(params) {
 async function listActivities() {
   const d = singleDevice();
   if (!d) return;
-  const out = $('#adbOut');
+  const out = $('#adbActivitiesOut');
   out.hidden = false;
   out.textContent = 'Reading the TV’s Settings pages…';
   try {
@@ -798,34 +812,91 @@ async function listActivities() {
   }
 }
 
-// Which shortcuts this TV can resolve; unsupported buttons are hidden (kept per TV).
-const pagesSupport = {};
+// Which Settings pages each TV has is checked over ADB when it is added (or when its
+// TV settings / All commands panel is first opened) and saved with the device. TV settings
+// shows only the shortcuts that work; every other page the TV has goes to All commands.
+const pagesScanTried = new Set();
+const pagesScanRunning = new Set();
+
+function savedPages(d) {
+  return d && d.config && d.config.settings_pages ? d.config.settings_pages : null;
+}
 
 function applyPagesSupport() {
   const d = currentDevice();
-  const support = d && selected !== ALL ? pagesSupport[d.id] : null;
+  const saved = selected !== ALL ? savedPages(d) : null;
+  const ok = saved ? new Set(saved.pages) : null;
   document.querySelectorAll('#settingsPages [data-page]').forEach((b) => {
-    b.hidden = !!support && support[b.dataset.page] === false;
+    b.hidden = !!ok && !ok.has(b.dataset.page);
+  });
+  $('#settingsPagesNote').textContent = saved
+    ? `Settings pages on ${d.name} (the rest are under All commands):`
+    : 'Open a Settings page on the TV (not checked against this TV yet):';
+  renderExtraPages();
+}
+
+function renderExtraPages() {
+  const d = currentDevice();
+  const saved = selected !== ALL ? savedPages(d) : null;
+  const box = $('#extraPages');
+  box.innerHTML = '';
+  if (!d || selected === ALL) {
+    $('#extraPagesNote').textContent = 'Pick a single device to see its other Settings pages.';
+    return;
+  }
+  if (!saved) {
+    $('#extraPagesNote').textContent = pagesScanRunning.has(d.id)
+      ? 'Checking this TV’s Settings pages over ADB…'
+      : 'Not checked yet: open this panel with the TV on and Network debugging enabled.';
+    return;
+  }
+  $('#extraPagesNote').textContent = saved.extra.length
+    ? `${saved.extra.length} more Settings pages on ${d.name}.`
+    : `No other Settings pages found on ${d.name}.`;
+  saved.extra.forEach(({ label, target }) => {
+    const b = document.createElement('button');
+    b.className = 'app';
+    b.textContent = label;
+    b.title = target;
+    b.addEventListener('click', () => openSettingsPage({ intent: target }));
+    box.appendChild(b);
   });
 }
 
-async function checkSupportedPages() {
-  const d = singleDevice();
-  if (!d) return;
+async function scanPages(d, { quiet = false } = {}) {
+  if (!d || pagesScanRunning.has(d.id)) return;
+  pagesScanRunning.add(d.id);
+  pagesScanTried.add(d.id);
   const out = $('#adbOut');
-  out.hidden = false;
-  out.textContent = 'Checking which Settings pages this TV supports…';
-  try {
-    const { result } = await api('POST', `/api/devices/${d.id}/action`, { action: 'adb_supported' });
-    pagesSupport[d.id] = result.pages;
-    const names = Object.fromEntries(SETTINGS_PAGES);
-    const yes = Object.keys(result.pages).filter((k) => result.pages[k]).map((k) => names[k]);
-    const no = Object.keys(result.pages).filter((k) => !result.pages[k]).map((k) => names[k]);
-    out.textContent = `Supported: ${yes.join(', ') || 'none'}\nNot available on this TV (hidden): ${no.join(', ') || 'none'}`;
-    applyPagesSupport();
-  } catch (err) {
-    if (!(err instanceof AuthError)) out.textContent = `Failed: ${err.message}`;
+  if (!quiet) {
+    out.hidden = false;
+    out.textContent = `Checking which Settings pages ${d.name} has… if the TV asks to allow debugging, choose Always allow.`;
   }
+  renderExtraPages();
+  try {
+    const { device } = await api('POST', `/api/devices/${d.id}/scan-pages`);
+    const i = devices.findIndex((x) => x.id === device.id);
+    if (i >= 0) devices[i] = device;
+    const saved = savedPages(device);
+    const names = Object.fromEntries(SETTINGS_PAGES);
+    const missing = SETTINGS_PAGES.map(([k]) => k).filter((k) => !saved.pages.includes(k));
+    const msg = `${device.name}: ${saved.pages.length} shortcuts work, ${saved.extra.length} more pages under All commands.`
+      + (missing.length ? `\nNot on this TV (hidden): ${missing.map((k) => names[k]).join(', ')}` : '');
+    if (quiet) toast(msg.split('\n')[0]); else out.textContent = msg;
+  } catch (err) {
+    if (err instanceof AuthError) return;
+    const msg = `Could not check ${d.name}'s Settings pages: ${err.message}`;
+    if (quiet) toast(msg, true, 6000); else out.textContent = msg;
+  } finally {
+    pagesScanRunning.delete(d.id);
+    if (currentDevice() && currentDevice().id === d.id) applyPagesSupport();
+  }
+}
+
+function autoScanPages() {
+  const d = currentDevice();
+  if (!d || selected === ALL || d.type !== 'sony_bravia' || savedPages(d) || pagesScanTried.has(d.id)) return;
+  scanPages(d, { quiet: true });
 }
 
 // Screen preview: fetch one frame, show it, then fetch the next (never overlapping).
@@ -1054,7 +1125,10 @@ document.addEventListener('DOMContentLoaded', () => {
   window.addEventListener('error', (e) => diagLine(`page error: ${e.message}`));
   window.addEventListener('unhandledrejection', (e) => diagLine(`unhandled rejection: ${e.reason}`));
   $('#screenToggle').addEventListener('click', toggleScreen);
-  $('#adbSupported').addEventListener('click', checkSupportedPages);
+  $('#adbSupported').addEventListener('click', () => { const d = singleDevice(); if (d) scanPages(d); });
+  ['#tvSettingsPanel', '#allCommandsPanel'].forEach((id) => $(id).addEventListener('toggle', (e) => {
+    if (e.target.open) autoScanPages();
+  }));
   $('#adbActivities').addEventListener('click', listActivities);
   const grid = $('#settingsPages');
   SETTINGS_PAGES.forEach(([page, label]) => {
@@ -1062,7 +1136,12 @@ document.addEventListener('DOMContentLoaded', () => {
     b.className = 'app';
     b.dataset.page = page;
     b.textContent = label;
-    b.addEventListener('click', () => openSettingsPage({ page }));
+    b.addEventListener('click', () => {
+      // A checked TV opens exactly the page found for this shortcut on that TV.
+      const saved = savedPages(currentDevice());
+      const target = saved && saved.targets ? saved.targets[page] : null;
+      openSettingsPage(target ? { intent: target } : { page });
+    });
     grid.appendChild(b);
   });
   $('#adbIntentGo').addEventListener('click', () => {
@@ -1074,6 +1153,45 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#showMethods').addEventListener('click', showMethods);
   $('#openTvSettingsApp').addEventListener('click', () => run('launch_app', { title: 'Settings' }));
 });
+
+// --------------------------------------------------------------- inputs --
+// Each TV reports its own inputs (number of HDMI ports, their names, composite, screen
+// mirroring, HDMI-CEC devices). The fixed TV/HDMI 1-4 buttons are only the fallback.
+let defaultInputsHtml = '';
+
+async function loadInputs() {
+  const d = currentDevice();
+  if (!d || selected === ALL || d.type !== 'sony_bravia' || inputsCache[d.id]
+      || inputsRequested.has(d.id)) return;
+  inputsRequested.add(d.id);
+  try {
+    const data = await api('POST', `/api/devices/${d.id}/action`, { action: 'inputs' });
+    const list = (data.result && data.result.inputs) || [];
+    if (list.length) inputsCache[d.id] = list;
+    if (currentDevice() && currentDevice().id === d.id) renderInputs();
+  } catch (err) {
+    inputsRequested.delete(d.id);   // TV off or unreachable: try again next time
+  }
+}
+
+function renderInputs() {
+  const d = currentDevice();
+  const list = d && selected !== ALL ? inputsCache[d.id] : null;
+  const row = $('#inputButtons');
+  if (!list) {
+    if (defaultInputsHtml) row.innerHTML = defaultInputsHtml;
+    return;
+  }
+  row.innerHTML = '';
+  list.forEach((inp) => {
+    const b = document.createElement('button');
+    b.className = `btn small${inp.connected ? '' : ' dim'}`;
+    b.dataset.uri = inp.uri;
+    b.textContent = inp.title;
+    b.title = inp.connected ? inp.uri : `${inp.uri} (nothing connected)`;
+    row.appendChild(b);
+  });
+}
 
 // ------------------------------------------------------------- commands --
 // The TV reports which IRCC commands it supports. Use that to show the extra

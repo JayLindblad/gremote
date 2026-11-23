@@ -9,10 +9,10 @@ keep it private by putting it behind [Tailscale](https://tailscale.com).
 - **Multiple devices**: switch between them with tabs, or pick **All** to send a command to every device at once
 - **Auto-discovery** of Sony TVs (SSDP plus a direct subnet sweep that works on Wi-Fi networks filtering multicast), or add a device by IP address
 - Full remote: power, D-pad, back/home/options, action/sync/audio (and STB menu when the TV has one), volume/mute, channels, playback, number pad, colour keys
-- **All commands** panel listing every remote command the TV itself reports, so nothing is out of reach
-- **TV settings** panel: picture, sound and power-saving settings read from the TV and changed directly (sliders, toggles, dropdowns), plus a "What does my TV expose?" listing
+- **All commands** panel listing every remote command the TV itself reports, plus every other Settings page found on that TV, so nothing is out of reach
+- **TV settings** panel: picture, sound and power-saving settings read from the TV and changed directly (sliders, toggles, dropdowns), plus a "What does my TV expose?" listing and shortcuts to the TV's Settings pages. Over ADB, gremote works out on each TV which pages it really has (reading the TV's own Settings apps), so only working shortcuts are shown
 - **Power on** with the TV's API or Wake-on-LAN
-- **Volume slider, input switching** (TV, HDMI 1-4) and an **app launcher** loaded from the TV
+- **Volume slider, input switching** with the TV's own inputs (its HDMI ports and their names, composite, screen mirroring, HDMI-CEC devices) and an **app launcher** loaded from the TV
 - Hold a button to repeat it (volume, arrows), keyboard shortcuts on desktop, works as a home-screen app on phones
 - Live power status on every tab
 - **Debug log** window showing every command, its result, timing and the underlying error when one fails

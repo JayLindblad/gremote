@@ -265,6 +265,34 @@ class SonyBravia(DeviceDriver):
                 raise ValueError(f"Unknown system setting: {target}")
         return {"ok": True, "group": group, "target": target, "value": value}
 
+    # -- inputs (whatever this TV has) ---------------------------------------------
+
+    async def list_inputs(self) -> list[dict]:
+        """The TV's own inputs, in its order: [{uri, title, connected, icon}].
+
+        The tuner comes first when the TV has one; then every external input it reports
+        (HDMI ports with its own names such as "HDMI 3/ARC", composite, screen mirroring,
+        and HDMI-CEC devices such as a cable box).
+        """
+        out: list[dict] = []
+        try:
+            schemes = await self._rpc("avContent", "getSchemeList", [], "1.0")
+            rows = schemes[0] if schemes and isinstance(schemes[0], list) else []
+            if any(isinstance(r, dict) and r.get("scheme") == "tv" for r in rows):
+                out.append({"uri": "tv:", "title": "TV", "connected": True, "icon": "meta:tv"})
+        except DeviceError:
+            pass
+        res = await self._rpc_versions("avContent", "getCurrentExternalInputsStatus", [],
+                                       ("1.1", "1.0"))
+        for row in res[0] if res and isinstance(res[0], list) else []:
+            if not isinstance(row, dict) or not row.get("uri"):
+                continue
+            out.append({"uri": row["uri"],
+                        "title": row.get("label") or row.get("title") or row["uri"],
+                        "connected": bool(row.get("connection")),
+                        "icon": row.get("icon") or ""})
+        return out
+
     # -- MAC address lookup -------------------------------------------------------
 
     def _arp_lookup(self) -> str | None:
@@ -344,9 +372,9 @@ class SonyBravia(DeviceDriver):
         if name == "adb_bench":
             port = params.get("port")
             return await adb.benchmark(self.host, int(port) if port else None)
-        if name == "adb_supported":
+        if name == "adb_scan_pages":
             port = params.get("port")
-            return await adb.supported_pages(self.host, int(port) if port else None)
+            return await adb.scan_pages(self.host, int(port) if port else None)
         if name == "adb_activities":
             port = params.get("port")
             return await adb.list_activities(self.host, int(port) if port else None)
@@ -382,6 +410,8 @@ class SonyBravia(DeviceDriver):
             uri = params.get("uri") or INPUT_URIS.get(
                 str(params.get("input", "tv")).lower(), str(params.get("input", "tv")))
             return {"ok": await self._call(lambda c: c.set_play_content(uri))}
+        if name == "inputs":
+            return {"inputs": await self.list_inputs()}
         if name == "apps":
             return {"apps": await self._call(lambda c: c.get_app_list())}
         if name == "launch_app":

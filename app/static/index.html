@@ -116,7 +116,7 @@
           <input type="range" id="volSlider" min="0" max="100" value="0" aria-label="Volume">
           <output id="volOut">—</output>
         </div>
-        <div class="row inputs">
+        <div class="row inputs" id="inputButtons">
           <button class="btn small" data-input="tv">TV</button>
           <button class="btn small" data-input="hdmi1">HDMI 1</button>
           <button class="btn small" data-input="hdmi2">HDMI 2</button>
@@ -147,16 +147,11 @@
         <p class="note">Needs <em>Network debugging</em> on in the TV's Developer options (Android TV 9, e.g. BRAVIA A1E: Settings → Device Preferences → About → select <em>Build</em> 7 times, then Developer options → Network debugging; Google TV: Settings → System → About → Android TV OS build). The first time, the TV asks you to allow this computer: choose Always allow.</p>
         <div class="panel-actions">
           <button class="link" id="adbTest">Test ADB connection</button>
-          <button class="link" id="adbSupported">Check which pages this TV supports</button>
-          <button class="link" id="adbActivities">List this TV's Settings pages</button>
+          <button class="link" id="adbSupported">Check this TV's pages again</button>
         </div>
         <pre class="note" id="adbOut" hidden></pre>
-        <p class="note">Open an Android TV / Google TV Settings page directly:</p>
+        <p class="note" id="settingsPagesNote">Open a Settings page on the TV:</p>
         <div class="apps" id="settingsPages"></div>
-        <div class="inputs-row">
-          <input id="adbIntent" placeholder="Intent action or package/.Activity from the list above" autocomplete="off" spellcheck="false">
-          <button class="btn small" id="adbIntentGo">Open</button>
-        </div>
       </details>
 
       <details class="panel" id="screenPanel" open>
@@ -191,6 +186,17 @@
         <summary>All commands</summary>
         <p class="note" id="allCommandsNote">Every remote command this TV reports. Pick a single device to load them.</p>
         <div class="apps" id="allCommands"></div>
+        <h4 class="set-group">More Settings pages on this TV</h4>
+        <p class="note" id="extraPagesNote">Settings pages this TV has beyond the shortcuts in TV settings (over ADB).</p>
+        <div class="apps" id="extraPages"></div>
+        <div class="panel-actions">
+          <button class="link" id="adbActivities">List every Settings activity (raw)</button>
+        </div>
+        <pre class="note" id="adbActivitiesOut" hidden></pre>
+        <div class="inputs-row">
+          <input id="adbIntent" placeholder="Intent action or package/.Activity" autocomplete="off" spellcheck="false">
+          <button class="btn small" id="adbIntentGo">Open</button>
+        </div>
       </details>
 
       <details class="panel">
