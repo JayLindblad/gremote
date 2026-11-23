@@ -1,6 +1,7 @@
-"""Android Debug Bridge access to a Google TV (the "Network debugging" option).
+"""Android Debug Bridge access to an Android TV / Google TV (the "Network debugging" option).
 
-Used for things Sony's REST API cannot reach, such as opening Google TV Settings pages.
+Used for things Sony's REST API cannot reach, such as opening the TV's Settings pages.
+Works back to Android TV 9 (e.g. BRAVIA A1E): plain "Network debugging" on port 5555.
 gremote keeps one RSA key; the TV asks to trust it the first time we connect.
 """
 
@@ -73,6 +74,14 @@ class AdbSession:
                 await self._dev.close()
             except Exception:
                 pass
+
+    async def exec_bytes(self, command: str, timeout: float = 10.0) -> bytes:
+        """Run a command over adb's exec: service (no pty) and return its raw output."""
+        try:
+            return await self._dev.exec_out(command, read_timeout_s=timeout,
+                                            transport_timeout_s=timeout, decode=False)
+        except Exception as exc:
+            raise DeviceError(f"ADB command failed: {type(exc).__name__}: {exc}") from exc
 
     async def shell(self, command: str, timeout: float = 10.0) -> str:
         try:
@@ -169,50 +178,88 @@ async def device_info(host: str, port: int | None = None) -> dict:
 
 
 # -- Settings shortcuts ----------------------------------------------------------------
-# key -> Android settings intent action. Most route to the matching Google TV page.
-SETTINGS_PAGES = {
-    "settings": "android.settings.SETTINGS",
-    "network": "android.settings.WIFI_SETTINGS",
-    "display": "android.settings.DISPLAY_SETTINGS",
-    "sound": "android.settings.SOUND_SETTINGS",
-    "apps": "android.settings.APPLICATION_SETTINGS",
-    "accessibility": "android.settings.ACCESSIBILITY_SETTINGS",
-    "bluetooth": "android.settings.BLUETOOTH_SETTINGS",
-    "datetime": "android.settings.DATE_SETTINGS",
-    "language": "android.settings.LOCALE_SETTINGS",
-    "keyboard": "android.settings.INPUT_METHOD_SETTINGS",
-    "storage": "android.settings.INTERNAL_STORAGE_SETTINGS",
-    "privacy": "android.settings.PRIVACY_SETTINGS",
-    "location": "android.settings.LOCATION_SOURCE_SETTINGS",
-    "about": "android.settings.DEVICE_INFO_SETTINGS",
-    "developer": "android.settings.APPLICATION_DEVELOPMENT_SETTINGS",
+# key -> candidates, tried in order: an intent action, or a component (package/.Activity).
+# Sony's own pages come first where they exist (e.g. Android TV 9 BRAVIAs such as the A1E);
+# the generic Android actions cover Google TV. Pages a TV lacks are hidden by supported_pages.
+_SONY_TV_SETTINGS = "com.android.tv.settings/com.sony.dtv.settings."
+SETTINGS_PAGES: dict[str, list[str]] = {
+    "settings": ["android.settings.SETTINGS"],
+    "network": ["android.settings.WIFI_SETTINGS"],
+    "display": ["android.settings.DISPLAY_SETTINGS", "com.sony.dtv.base.screensettings"],
+    "picture": ["com.sony.dtv.base.picturesettings"],
+    "sound": ["android.settings.SOUND_SETTINGS"],
+    "sony_sound": ["com.sony.dtv.base.soundsettings"],
+    "speakers": ["com.sony.dtv.settings.intent.action.SPEAKERS_SETTINGS"],
+    "inputs": [_SONY_TV_SETTINGS + "externalinputs.ExternalInputsActivity"],
+    "remote_start": ["com.sony.dtv.networksettings/.RemoteStartActivity"],
+    "power": [_SONY_TV_SETTINGS + "power.EcoActivity"],
+    "apps": ["android.settings.APPLICATION_SETTINGS"],
+    "accessibility": ["android.settings.ACCESSIBILITY_SETTINGS"],
+    "bluetooth": ["android.settings.BLUETOOTH_SETTINGS",
+                  "com.google.android.intent.action.CONNECT_INPUT"],
+    "datetime": ["android.settings.DATE_SETTINGS"],
+    "language": ["android.settings.LOCALE_SETTINGS"],
+    "keyboard": ["android.settings.INPUT_METHOD_SETTINGS"],
+    "storage": ["android.settings.INTERNAL_STORAGE_SETTINGS"],
+    "privacy": ["android.settings.PRIVACY_SETTINGS"],
+    "location": ["android.settings.LOCATION_SOURCE_SETTINGS"],
+    "about": [_SONY_TV_SETTINGS + "about.AboutActivity", "android.settings.DEVICE_INFO_SETTINGS"],
+    "developer": ["android.settings.APPLICATION_DEVELOPMENT_SETTINGS"],
 }
+# Some TVs route a standard action to an unrelated page; such a match does not count.
+# (Sony Android TV 9 sends DEVICE_INFO_SETTINGS to External inputs.)
+WRONG_TARGET = {"about": re.compile(r"ExternalInputs", re.I)}
 
-_SAFE_INTENT = __import__("re").compile(r"^[A-Za-z0-9_.:/$-]{3,200}$")
+_SAFE_INTENT = re.compile(r"^[A-Za-z0-9_.:/$-]{3,200}$")
+
+
+def _flag(target: str) -> str:
+    return "-n" if "/" in target else "-a"   # component (pkg/.Activity) or action
+
+
+async def _resolve(session, target: str) -> str | None:
+    """The activity the TV would open for this action/component, or None."""
+    out = await session.shell(f"cmd package resolve-activity --brief {_flag(target)} {target}")
+    if "no activity found" in out.lower():
+        return None
+    last = out.strip().splitlines()[-1].strip() if out.strip() else ""
+    return last if "/" in last and " " not in last else None
+
+
+async def _usable(session, page: str | None, target: str) -> str | None:
+    resolved = await _resolve(session, target)
+    wrong = WRONG_TARGET.get(page or "")
+    if resolved and wrong and wrong.search(resolved):
+        return None
+    return resolved
 
 
 async def open_settings(host: str, page: str | None = None, intent: str | None = None,
                         port: int | None = None) -> dict:
-    """Open a Settings page on the TV by shortcut key or a custom intent action."""
-    action = SETTINGS_PAGES.get(page or "") or intent
-    if not action or not _SAFE_INTENT.match(action):
+    """Open a Settings page on the TV by shortcut key or a custom intent action/component."""
+    targets = SETTINGS_PAGES.get(page or "") or ([intent] if intent else [])
+    if not targets or not all(_SAFE_INTENT.match(t) for t in targets):
         raise ValueError("Unknown settings page, or invalid intent action")
     session = await connect_any(host, port)
+    errors = []
     try:
-        flag = "-n" if "/" in action else "-a"   # component (pkg/.Activity) or action
-        out = await session.shell(f"am start {flag} {action}")
+        for target in targets:
+            if page and not await _usable(session, page, target):
+                errors.append(f"{target}: not on this TV")
+                continue
+            out = await session.shell(f"am start {_flag(target)} {target}")
+            lowered = out.lower()
+            if "error" in lowered or "unable to resolve" in lowered or "exception" in lowered:
+                errors.append(f"{target}: {out[:300]}")
+                continue
+            return {"opened": target, "adb_port": session.port}
     finally:
         await session.__aexit__()
-    lowered = out.lower()
-    if "error" in lowered or "unable to resolve" in lowered or "exception" in lowered:
-        raise DeviceError(f"TV could not open {action}: {out[:300]}")
-    return {"opened": action, "adb_port": session.port}
+    raise DeviceError("TV could not open " + "; ".join(errors))
 
 
 async def list_activities(host: str, port: int | None = None) -> dict:
     """Activities of the TV's Settings packages, to find the right page to open."""
-    import re
-
     session = await connect_any(host, port)
     try:
         packages = await session.shell("pm list packages")
@@ -272,6 +319,9 @@ async def screenshot(host: str, port: int | None = None) -> bytes:
             try:
                 out = await entry["session"].shell("screencap -p | base64 -w 0", timeout=20.0)
                 png = base64.b64decode(out, validate=False)
+                if not png.startswith(b"\x89PNG"):
+                    # No usable base64 on this TV: fetch the PNG over exec (no pty, binary-safe).
+                    png = await entry["session"].exec_bytes("screencap -p", timeout=20.0)
                 if not png.startswith(b"\x89PNG"):
                     raise DeviceError(f"screencap did not return an image: {out[:120]}")
                 entry["last"] = time.monotonic()
@@ -387,7 +437,7 @@ async def screen_diagnostics(host: str, port: int | None = None) -> str:
     try:
         for label, command in (
             ("screenrecord stderr", "cat /data/local/tmp/gremote-sr.err"),
-            ("screenrecord processes", "ps -A | grep -i screenrecord"),
+            ("screenrecord processes", "(ps -A 2>/dev/null || ps) | grep -i screenrecord"),
             ("encoder-related log lines", "logcat -d -t 600 2>&1 | grep -i -E "
              "'screenrecord|MediaCodec|OMX|encoder' | tail -25"),
         ):
@@ -447,9 +497,12 @@ async def supported_pages(host: str, port: int | None = None) -> dict:
     session = await connect_any(host, port)
     try:
         result = {}
-        for key, action in SETTINGS_PAGES.items():
-            out = await session.shell(f"cmd package resolve-activity --brief -a {action}")
-            result[key] = "/" in out and "no activity found" not in out.lower()
+        for key, targets in SETTINGS_PAGES.items():
+            result[key] = False
+            for target in targets:
+                if await _usable(session, key, target):
+                    result[key] = True
+                    break
         return {"pages": result, "adb_port": session.port}
     finally:
         await session.__aexit__()

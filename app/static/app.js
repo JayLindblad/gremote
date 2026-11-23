@@ -769,8 +769,10 @@ async function testAdb() {
 
 const SETTINGS_PAGES = [
   ['settings', 'Settings home'], ['network', 'Network & Internet'], ['display', 'Display'],
-  ['sound', 'Sound'], ['apps', 'Apps'], ['accessibility', 'Accessibility'],
-  ['bluetooth', 'Bluetooth'], ['datetime', 'Date & time'], ['language', 'Language'],
+  ['picture', 'Picture'], ['sound', 'Sound'], ['sony_sound', 'Sound (picture menu)'],
+  ['speakers', 'Speakers'], ['inputs', 'External inputs'], ['remote_start', 'Remote start'],
+  ['power', 'Power & Eco'], ['apps', 'Apps'], ['accessibility', 'Accessibility'],
+  ['bluetooth', 'Bluetooth & accessories'], ['datetime', 'Date & time'], ['language', 'Language'],
   ['keyboard', 'Keyboard'], ['storage', 'Storage'], ['privacy', 'Privacy'],
   ['location', 'Location'], ['about', 'About'], ['developer', 'Developer options'],
 ];

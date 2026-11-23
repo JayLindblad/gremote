@@ -44,10 +44,12 @@ Open `http://localhost:8000` and sign in with the password from `.env`.
 
 ### First-time TV setup (Sony)
 
+Works with Android-based BRAVIA TVs running Android TV 9 (e.g. the 2017 **A1E** OLED) and with newer Google TV models. Older models expose fewer settings over the API; anything a TV doesn't support is listed under *What does my TV expose?* and skipped.
+
 On the TV, enable IP control so gremote can talk to it:
 
-1. **Settings → Network → Home network → IP control**: set *Authentication* to **Normal and Pre-Shared Key** and choose a PSK.
-2. **Remote start = On** (needed for Wake-on-LAN from standby).
+1. **Settings → Network → Home network → IP control** (Android TV 9, e.g. A1E: **Settings → Network & Internet → Home network → IP control**): set *Authentication* to **Normal and Pre-Shared Key** and choose a PSK.
+2. **Remote start = On** (needed for Wake-on-LAN from standby; on Android TV 9 it is under **Network & Internet**).
 3. Give the TV a **fixed IP (DHCP reservation)** in your router.
 
 Then in gremote: ⚙ → **Scan network** (or add by IP) → enter the PSK. The MAC for Wake-on-LAN is read from the TV automatically (leave it blank); use **Get MAC from TV** on a device later if it was missed.
