@@ -160,19 +160,34 @@ async def fetch_mac(device_id: str):
     return {"device": _public(device)}
 
 
+_page_scans: dict[str, asyncio.Task] = {}   # one Settings-page scan per device at a time
+
+
+async def _scan_and_save(device_id: str) -> dict:
+    """Scan the TV's Settings pages and save the result; joins a scan already running."""
+    task = _page_scans.get(device_id)
+    if task is None or task.done():
+        async def work() -> dict:
+            device = _require_device(device_id)
+            result = await _run(device, "adb_scan_pages", None,
+                                lambda: driver_for(device).action("adb_scan_pages", {}))
+            device = _require_device(device_id)        # re-read: may have been edited meanwhile
+            config = {**device["config"], "settings_pages": {
+                "pages": result.get("pages", []), "targets": result.get("targets", {}),
+                "extra": result.get("extra", []), "checked": int(time.time())}}
+            return upsert_device(device_id, name=device["name"], type=device["type"],
+                                 host=device["host"], mac=device.get("mac"), config=config)
+        task = _page_scans[device_id] = asyncio.create_task(work())
+        task.add_done_callback(lambda t: _page_scans.pop(device_id, None)
+                               if _page_scans.get(device_id) is t else None)
+    return await asyncio.shield(task)
+
+
 @router.post("/{device_id}/scan-pages")
 async def scan_pages(device_id: str):
     """Ask the TV (over ADB) which Settings pages it has, and remember the answer."""
-    device = _require_device(device_id)
-    result = await _run(device, "adb_scan_pages", None,
-                        lambda: driver_for(device).action("adb_scan_pages", {}))
-    config = {**device["config"], "settings_pages": {
-        "pages": result.get("pages", []), "targets": result.get("targets", {}),
-        "extra": result.get("extra", []),
-        "checked": int(time.time())}}
-    device = upsert_device(device_id, name=device["name"], type=device["type"],
-                           host=device["host"], mac=device.get("mac"), config=config)
-    return {"device": _public(device)}
+    _require_device(device_id)
+    return {"device": _public(await _scan_and_save(device_id))}
 
 
 @router.put("/{device_id}")
@@ -434,6 +449,22 @@ def _note_status_problem_screen(device: dict, problem: str, detail: str | None) 
 @router.post("/{device_id}/action")
 async def device_action(device_id: str, body: ActionRequest):
     device = _require_device(device_id)
+    page = body.params.get("page") if body.action == "adb_open" else None
+    if page and not body.params.get("intent") and device["type"] == "sony_bravia":
+        # Open the page found for this shortcut on this TV. Not checked yet (or a check is
+        # still running): finish the check first, rather than guessing with a standard action.
+        saved = (device["config"].get("settings_pages") or {}).get("targets")
+        if saved is None:
+            try:
+                device = await _scan_and_save(device_id)
+                saved = device["config"]["settings_pages"]["targets"]
+            except HTTPException:
+                saved = {}                                # no ADB scan possible: plain fallback
+        if page in saved:
+            body.params = {**body.params, "intent": saved[page]}
+        elif saved:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                                detail=f"This TV has no {page} page")
     result = await _run(device, body.action, body.params,
                         lambda: driver_for(device).action(body.action, body.params))
     return {"result": result}

@@ -792,9 +792,15 @@ const SETTINGS_PAGES = [
 ];
 
 async function openSettingsPage(params) {
-  if (!singleDevice()) return;
+  const d = singleDevice();
+  if (!d) return;
+  // Not checked yet: the server checks this TV's pages first (or waits for the check that
+  // is already running), then opens the page it found.
+  const checking = params.page && !savedPages(d);
+  if (checking) toast('Finding this page on the TV…');
   const r = await run('adb_open', params);
   if (r) toast('Opened on the TV');
+  if (checking) await loadDevices();     // pick up the pages the check saved
 }
 
 async function listActivities() {
@@ -864,7 +870,11 @@ function renderExtraPages() {
 }
 
 async function scanPages(d, { quiet = false } = {}) {
-  if (!d || pagesScanRunning.has(d.id)) return;
+  if (!d) return;
+  if (pagesScanRunning.has(d.id)) {
+    if (!quiet) toast(`Already checking ${d.name}'s Settings pages…`);
+    return;
+  }
   pagesScanRunning.add(d.id);
   pagesScanTried.add(d.id);
   const out = $('#adbOut');
