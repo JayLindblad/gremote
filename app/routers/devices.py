@@ -288,8 +288,8 @@ def _flush_after(buf: bytes, quiet: float) -> float | None:
 
 
 @router.websocket("/{device_id}/screen/stream")
-async def device_screen_stream(ws: WebSocket, device_id: str, size: str = "1280x720",
-                               bitrate: int = 4_000_000, diag: int = 0):
+async def device_screen_stream(ws: WebSocket, device_id: str, size: str = "640x360",
+                               bitrate: int = 1_000_000, diag: int = 0):
     """Live H.264 video of the TV's screen: binary frames for the browser's MSE player."""
     device = get_device(device_id)
     if not device:

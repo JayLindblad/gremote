@@ -353,7 +353,7 @@ class SonyBravia(DeviceDriver):
     async def screen_diagnostics(self) -> str:
         return await adb.screen_diagnostics(self.host)
 
-    def screen_stream(self, size: str = "1280x720", bitrate: int = 4_000_000):
+    def screen_stream(self, size: str = "640x360", bitrate: int = 1_000_000):
         return adb.stream_h264(self.host, size, bitrate)
 
     async def action(self, name: str, params: dict | None = None) -> dict:

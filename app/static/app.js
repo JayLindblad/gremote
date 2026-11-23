@@ -1143,6 +1143,11 @@ document.addEventListener('DOMContentLoaded', () => {
   window.addEventListener('error', (e) => diagLine(`page error: ${e.message}`));
   window.addEventListener('unhandledrejection', (e) => diagLine(`unhandled rejection: ${e.reason}`));
   $('#screenToggle').addEventListener('click', toggleScreen);
+  // Remember the preview quality per browser (smaller = less work for the TV, more frames).
+  const qualitySel = $('#screenQuality');
+  const savedQuality = store.get('screenQuality');
+  if (savedQuality && [...qualitySel.options].some((o) => o.value === savedQuality)) qualitySel.value = savedQuality;
+  qualitySel.addEventListener('change', () => store.set('screenQuality', qualitySel.value));
   $('#adbSupported').addEventListener('click', () => { const d = singleDevice(); if (d) scanPages(d); });
   ['#tvSettingsPanel', '#allCommandsPanel'].forEach((id) => $(id).addEventListener('toggle', (e) => {
     if (e.target.open) autoScanPages();

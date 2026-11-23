@@ -397,12 +397,14 @@ async def _raw_pty_ok(session) -> bool:
 
 
 # How long the relay waits for more bytes before treating the tail as a whole frame.
-# Raw mode delivers a frame within milliseconds; base64 mode arrives in ~4 KB batches.
-QUIET_RAW = 0.06
+# Raw mode delivers a frame within milliseconds (small frames come every ~25 ms at 640x360);
+# base64 mode arrives in ~4 KB batches. Keyframes and large frames get longer (see the relay).
+QUIET_RAW = 0.02
 QUIET_BASE64 = 0.35
+_raw_ok: set[str] = set()     # TVs whose shell passed the raw-bytes self-test (not re-run)
 
 
-async def stream_h264(host: str, size: str = "1280x720", bitrate: int = 4_000_000,
+async def stream_h264(host: str, size: str = "640x360", bitrate: int = 1_000_000,
                       port: int | None = None):
     """Yield raw H.264 (Annex B) chunks from the TV's screenrecord, restarting it every ~3 min.
 
@@ -415,7 +417,10 @@ async def stream_h264(host: str, size: str = "1280x720", bitrate: int = 4_000_00
     session = await connect_any(host, port)
     record = (f"screenrecord --time-limit 170 --size {size} --bit-rate {int(bitrate)} "
               "--output-format=h264 - 2>/data/local/tmp/gremote-sr.err")
-    raw = await _raw_pty_ok(session)
+    # The self-test writes 64 KB on the TV; once a TV has passed it, don't make it work again.
+    raw = host in _raw_ok or await _raw_pty_ok(session)
+    if raw:
+        _raw_ok.add(host)
     command = ("rm -f /data/local/tmp/gremote-sr.err; "
                + (f"stty -opost; {record}" if raw else f"{record} | base64"))
     yield ("mode", "raw" if raw else "base64", QUIET_RAW if raw else QUIET_BASE64)
@@ -442,6 +447,7 @@ async def stream_h264(host: str, size: str = "1280x720", bitrate: int = 4_000_00
                             pending = pending[usable:]
             except Exception as exc:    # read timeout, dropped link, ...
                 if not got_data:
+                    _raw_ok.discard(host)          # test the shell again next time
                     await _raise_encoder_error(session, size, exc)
                     failures += 1
                     if failures >= 3:
