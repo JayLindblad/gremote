@@ -12,6 +12,7 @@ keep it private by putting it behind [Tailscale](https://tailscale.com).
 - **All commands** panel listing every remote command the TV itself reports, plus every other Settings page found on that TV, so nothing is out of reach
 - **TV settings** panel: picture, sound and power-saving settings read from the TV and changed directly (sliders, toggles, dropdowns), plus a "What does my TV expose?" listing and shortcuts to the TV's Settings pages. Over ADB, gremote works out on each TV which pages it really has (reading the TV's own Settings apps), so only working shortcuts are shown
 - **Power on** with the TV's API or Wake-on-LAN
+- **Xfinity X1 / Flex cable box** attached to a TV (Cable box panel). X1 boxes ignore remote keys over HDMI-CEC and have no open local API, so gremote uses Comcast's Adaptive Remote service (needs internet). Pair once: press **Pair Xfinity box**, say "Easy Pair" into the Xfinity voice remote, and enter the 7-digit code. When the TV is showing the box's HDMI input, the arrows, OK, Back, channel, number, Info, Guide and play keys go to the box, while power, volume and Home stay with the TV. The panel also has Guide, Xfinity, Last, Record, A–D and typed voice commands ("ESPN", "channel 206")
 - **Volume slider, input switching** with the TV's own inputs (its HDMI ports and their names, composite, screen mirroring, HDMI-CEC devices) and an **app launcher** loaded from the TV
 - Hold a button to repeat it (volume, arrows), keyboard shortcuts on desktop, works as a home-screen app on phones
 - Live power status on every tab

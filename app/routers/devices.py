@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from .. import debuglog
 from ..auth import require_auth
 from ..db import delete_device, get_device, list_devices, upsert_device
-from ..devices import DeviceError, driver_for, known_types
+from ..devices import DeviceError, driver_for, known_types, xfinity
 
 router = APIRouter(
     prefix="/api/devices",
@@ -46,6 +46,10 @@ def _public(device: dict) -> dict:
     out = dict(device)
     out["config"] = {k: v for k, v in cfg.items() if k not in SECRET_CONFIG_KEYS}
     out["has_psk"] = bool(cfg.get("psk"))
+    box = cfg.get("xfinity")
+    if box:
+        out["config"]["xfinity"] = {"paired": bool(box.get("token")), "mode": box.get("mode", "auto"),
+                                    "port": box.get("port")}
     return out
 
 
@@ -236,6 +240,9 @@ async def device_status(device_id: str):
         _note_status_problem(device, str(exc), _cause(exc))
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
     _note_status_problem(device, result.pop("error", None), None)
+    if _box(device) and result.get("power") == "active":
+        await _refresh_input(device)
+        result["cable_box"] = _box_active_cached(device)
     return {"status": result}
 
 
@@ -465,6 +472,187 @@ async def device_action(device_id: str, body: ActionRequest):
         elif saved:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                                 detail=f"This TV has no {page} page")
+    if body.action in ("xfinity_key", "xfinity_say"):
+        return {"result": await _run(device, body.action, body.params,
+                                     lambda: _box_send(device_id, body.action, body.params))}
+    if body.action == "ircc" and _box(device):
+        vcode = xfinity.vcode_for(str(body.params.get("code", "")))
+        if vcode and await _box_active(device):
+            result = await _run(device, "xfinity_key", {"vcode": vcode, "via": body.params.get("code")},
+                                lambda: _box_send(device_id, "xfinity_key", {"vcode": vcode}))
+            return {"result": {**result, "to": "cable_box"}}
     result = await _run(device, body.action, body.params,
                         lambda: driver_for(device).action(body.action, body.params))
+    if body.action == "set_input" and _box(device):
+        uri = body.params.get("uri") or ""
+        if uri:
+            _inputs[device_id] = (uri, time.monotonic())
+        else:
+            _inputs.pop(device_id, None)
     return {"result": result}
+
+
+# -- Xfinity X1 box attached to a TV (Comcast's Adaptive Remote cloud service) ----------------
+# Pairing gives a token that is stored with the TV. When the TV shows the box's HDMI input
+# (mode "auto"), or always (mode "box"), navigation/channel/number/playback keys go to the box.
+
+_pairing: dict[str, dict] = {}                     # device id -> pairing in progress
+_inputs: dict[str, tuple[str, float] | None] = {}  # device id -> (TV's current input uri, when)
+_input_checks: dict[str, asyncio.Task] = {}
+INPUT_FRESH = 8.0          # seconds a known input is trusted before it is checked again
+_PORT = re.compile(r"(?:^|[?&])port=(\d+)")
+
+
+class BoxSettings(BaseModel):
+    mode: str | None = None    # auto | box | off
+    port: int | None = None    # the TV's HDMI port the box is plugged into
+
+
+def _box(device: dict) -> dict | None:
+    box = device["config"].get("xfinity")
+    return box if box and box.get("token") and box.get("mode", "auto") != "off" else None
+
+
+def _save_box(device_id: str, box: dict | None) -> dict:
+    device = _require_device(device_id)               # re-read: may have changed meanwhile
+    config = dict(device["config"])
+    if box is None:
+        config.pop("xfinity", None)
+    else:
+        config["xfinity"] = box
+    return upsert_device(device_id, name=device["name"], type=device["type"],
+                         host=device["host"], mac=device.get("mac"), config=config)
+
+
+def _input_port(uri: str) -> int | None:
+    if not uri.startswith(("extInput:hdmi", "extInput:cec")):
+        return None
+    m = _PORT.search(uri.split("?", 1)[1] if "?" in uri else "")
+    return int(m.group(1)) if m else None
+
+
+def _box_active_cached(device: dict) -> bool:
+    box = _box(device)
+    if not box:
+        return False
+    if box.get("mode") == "box":
+        return True
+    seen = _inputs.get(device["id"])
+    return bool(seen and box.get("port") and _input_port(seen[0]) == box["port"])
+
+
+async def _refresh_input(device: dict) -> None:
+    """Ask the TV what it is showing (shared between concurrent callers)."""
+    task = _input_checks.get(device["id"])
+    if task is None or task.done():
+        async def work():
+            try:
+                playing = await driver_for(device).action("playing")
+                _inputs[device["id"]] = ((playing or {}).get("uri") or "", time.monotonic())
+            except DeviceError:
+                _inputs[device["id"]] = ("", time.monotonic())
+        task = _input_checks[device["id"]] = asyncio.create_task(work())
+    await asyncio.shield(task)
+
+
+async def _box_active(device: dict) -> bool:
+    box = _box(device)
+    if not box or box.get("mode") == "box":
+        return bool(box)
+    seen = _inputs.get(device["id"])
+    if seen is None:
+        await _refresh_input(device)                   # first key: find out now
+    elif time.monotonic() - seen[1] > INPUT_FRESH:
+        asyncio.create_task(_refresh_input(device))    # use what we know; check for next time
+    return _box_active_cached(device)
+
+
+async def _box_send(device_id: str, action: str, params: dict) -> dict:
+    device = _require_device(device_id)
+    box = device["config"].get("xfinity") or {}
+    if not box.get("token"):
+        raise DeviceError("No Xfinity box is paired with this TV")
+    if action == "xfinity_key":
+        vcode = xfinity.vcode_for(str(params.get("vcode", "")))
+        if not vcode:
+            raise ValueError(f"Unknown cable box key: {params.get('vcode')}")
+        send = lambda token: xfinity.press(token, vcode)      # noqa: E731
+    else:
+        text = str(params.get("text", "")).strip()[:200]
+        if not text:
+            raise ValueError("Type a command, e.g. ESPN or channel 5")
+        send = lambda token: xfinity.say(token, text)         # noqa: E731
+    if xfinity.needs_refresh(box):
+        box = {**box, **await xfinity.refresh(box["token"])}
+        _save_box(device_id, box)
+    try:
+        await send(box["token"])
+    except xfinity.Expired:
+        box = {**box, **await xfinity.refresh(box["token"])}
+        _save_box(device_id, box)
+        await send(box["token"])
+    return {"sent": params.get("vcode") or params.get("text")}
+
+
+def _guess_box_port(inputs: list[dict]) -> int | None:
+    """HDMI port of the box: a CEC device named like one, else the only CEC tuner."""
+    cec = [i for i in inputs if str(i.get("uri", "")).startswith("extInput:cec")]
+    named = [i for i in cec if re.search(r"xfinity|x1|comcast|flex|xi\d", str(i.get("title")), re.I)]
+    tuners = [i for i in cec if "type=tuner" in i["uri"]]
+    pick = named or (tuners if len(tuners) == 1 else [])
+    return _input_port(pick[0]["uri"]) if pick else None
+
+
+@router.post("/{device_id}/xfinity/pair")
+async def xfinity_pair(device_id: str):
+    """Start pairing: returns the 7-digit code to enter in the box's Easy Pair app."""
+    device = _require_device(device_id)
+    started = await _run(device, "xfinity_pair", None, lambda: xfinity.pair_start())
+    _pairing[device_id] = started
+    return {"code": started["code"], "expires": started["expires"]}
+
+
+@router.post("/{device_id}/xfinity/pair/check")
+async def xfinity_pair_check(device_id: str):
+    device = _require_device(device_id)
+    pending = _pairing.get(device_id)
+    if not pending:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Start pairing first")
+    login = await _run(device, "xfinity_pair_check", None,
+                       lambda: xfinity.pair_confirm(pending["token"], pending["client_id"]))
+    if not login:
+        return {"paired": False}
+    _pairing.pop(device_id, None)
+    port = None
+    try:
+        port = _guess_box_port((await driver_for(device).action("inputs")).get("inputs", []))
+    except DeviceError:
+        pass
+    old = device["config"].get("xfinity") or {}
+    device = _save_box(device_id, {**login, "client_id": pending["client_id"],
+                                   "mode": old.get("mode", "auto"), "port": old.get("port") or port})
+    debuglog.record(f"Xfinity box paired (HDMI {port or '?'})", kind="device", device=device["name"])
+    return {"paired": True, "device": _public(device)}
+
+
+@router.put("/{device_id}/xfinity")
+async def xfinity_settings(device_id: str, body: BoxSettings):
+    device = _require_device(device_id)
+    box = dict(device["config"].get("xfinity") or {})
+    if not box.get("token"):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Pair the box first")
+    if body.mode is not None:
+        if body.mode not in ("auto", "box", "off"):
+            raise HTTPException(status_code=422, detail="mode must be auto, box or off")
+        box["mode"] = body.mode
+    if body.port is not None:
+        box["port"] = body.port or None
+    return {"device": _public(_save_box(device_id, box))}
+
+
+@router.delete("/{device_id}/xfinity")
+async def xfinity_unpair(device_id: str):
+    _require_device(device_id)
+    _pairing.pop(device_id, None)
+    _inputs.pop(device_id, None)
+    return {"device": _public(_save_box(device_id, None))}

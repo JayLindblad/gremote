@@ -129,6 +129,50 @@
         </div>
       </details>
 
+      <details class="panel" id="cablePanel">
+        <summary>Cable box <span class="badge good" id="cableChip" hidden>keys → box</span></summary>
+        <div id="cableUnpaired">
+          <p class="note">Control an Xfinity X1 or Flex box plugged into this TV. The box ignores remote keys over HDMI, so gremote uses Comcast's Adaptive Remote service instead (needs internet). Pair once:</p>
+          <div class="panel-actions"><button class="btn small" id="cablePair" type="button">Pair Xfinity box</button></div>
+          <div id="cableCode" hidden>
+            <p class="note">On the TV, press the mic button on the Xfinity voice remote and say <strong>“Easy Pair”</strong>. Enter this code and choose <em>Pair Now</em>:</p>
+            <p class="pair-code" id="cableCodeText"></p>
+            <p class="note" id="cableWait">Waiting for the TV…</p>
+          </div>
+        </div>
+        <div id="cablePaired" hidden>
+          <div class="set-row"><label for="cableMode">Remote keys go to the box</label>
+            <select id="cableMode">
+              <option value="auto">When the TV shows the box</option>
+              <option value="box">Always</option>
+              <option value="off">Never (paused)</option>
+            </select></div>
+          <div class="set-row"><label for="cablePort">The box is on</label><select id="cablePort"></select></div>
+          <p class="note">Arrows, OK, Back, channel, numbers, Info, Guide and play keys then go to the box; power, volume and Home stay with the TV.</p>
+          <div class="row four">
+            <button class="btn small" data-vcode="GUIDE">Guide</button>
+            <button class="btn small" data-vcode="INFO">Info</button>
+            <button class="btn small" data-vcode="MENU">Xfinity</button>
+            <button class="btn small" data-vcode="EXIT">Exit</button>
+            <button class="btn small" data-vcode="PREV">Last</button>
+            <button class="btn small" data-vcode="RECORD">Rec</button>
+            <button class="btn small" data-vcode="PAGE_UP">Page ▲</button>
+            <button class="btn small" data-vcode="PAGE_DOWN">Page ▼</button>
+          </div>
+          <div class="colors">
+            <button class="btn c-yellow" data-vcode="COLOR_KEY_0">A</button>
+            <button class="btn c-blue" data-vcode="COLOR_KEY_1">B</button>
+            <button class="btn c-red" data-vcode="COLOR_KEY_2">C</button>
+            <button class="btn c-green" data-vcode="COLOR_KEY_3">D</button>
+          </div>
+          <form id="cableSay" class="inline-form">
+            <input id="cableSayInput" placeholder="Say: ESPN, channel 206, Bluey…" aria-label="Voice command for the box" autocomplete="off">
+            <button class="btn small" type="submit">Send</button>
+          </form>
+          <div class="panel-actions"><button class="link" id="cableUnpair" type="button">Unpair the box</button></div>
+        </div>
+      </details>
+
       <details class="panel" id="appsPanel" open>
         <summary>Apps</summary>
         <div class="apps" id="apps"></div>

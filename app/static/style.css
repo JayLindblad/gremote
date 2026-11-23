@@ -287,3 +287,9 @@ select {
 #screenCanvas, #screenVideo { width: 100%; border-radius: 8px; margin-top: 8px; background: #000; aspect-ratio: 16 / 9; }
 #screenImg { width: 100%; border-radius: 8px; margin-top: 8px; background: #000; }
 #adbOut { white-space: pre-wrap; max-height: 280px; overflow: auto; font-size: 11px; user-select: text; }
+
+/* Cable box panel */
+#cableChip { margin-left: 6px; font-weight: 500; }
+.pair-code { font-size: 32px; font-weight: 700; letter-spacing: .18em; text-align: center; margin: 8px 0;
+  font-variant-numeric: tabular-nums; user-select: all; -webkit-user-select: all; }
+#cablePanel .colors .btn { color: #111; font-weight: 700; }

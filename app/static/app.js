@@ -151,6 +151,7 @@ function renderRemote() {
   loadCommands();
   loadInputs();
   renderScreenReader();
+  renderCable();
   checkScreenReader();
   autoLoadApps();
   if ($('#tvSettingsPanel').open || $('#allCommandsPanel').open) autoScanPages();
@@ -180,7 +181,9 @@ function renderStatusBar() {
     $('#volOut').textContent = s.volume;
   }
   if (s.mute) parts.push('muted');
+  if (s.cable_box) parts.push('keys → cable box');
   bar.textContent = parts.join(' · ');
+  renderCableChip();
 }
 
 // ------------------------------------------------------------- commands --
@@ -596,6 +599,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (!document.hidden && !$('#app').hidden) checkScreenReader();
   });
   $('#a11yOff').addEventListener('click', screenReaderOff);
+  wireCable();
   $('#a11yCheck').addEventListener('click', () => checkScreenReader({ quiet: false }));
 
   try {
@@ -1274,7 +1278,7 @@ async function loadInputs() {
     const data = await api('POST', `/api/devices/${d.id}/action`, { action: 'inputs' });
     const list = (data.result && data.result.inputs) || [];
     if (list.length) inputsCache[d.id] = list;
-    if (currentDevice() && currentDevice().id === d.id) renderInputs();
+    if (currentDevice() && currentDevice().id === d.id) { renderInputs(); renderCable(); }
   } catch (err) {
     inputsRequested.delete(d.id);   // TV off or unreachable: try again next time
   }
@@ -1342,5 +1346,137 @@ function renderCommands() {
     b.textContent = name;
     onTap(b, () => ircc(name));
     box.appendChild(b);
+  });
+}
+
+// ------------------------------------------------------------ cable box --
+// An Xfinity X1/Flex box attached to the selected TV, controlled through Comcast's
+// Adaptive Remote service. The server decides per key whether it goes to the box.
+let cablePairTimer = null;
+
+function replaceDevice(device) {
+  const i = devices.findIndex((x) => x.id === device.id);
+  if (i >= 0) devices[i] = device;
+}
+
+const cableOf = (d) => (d && d.config && d.config.xfinity) || null;
+
+function renderCableChip() {
+  const d = currentDevice();
+  const s = d && statusCache[d.id];
+  $('#cableChip').hidden = !(selected !== ALL && s && s.cable_box);
+}
+
+function renderCable() {
+  const d = currentDevice();
+  const panel = $('#cablePanel');
+  panel.hidden = !d || selected === ALL || d.type !== 'sony_bravia';
+  if (panel.hidden) return;
+  const box = cableOf(d);
+  const paired = !!(box && box.paired);
+  $('#cableUnpaired').hidden = paired;
+  $('#cablePaired').hidden = !paired;
+  if (paired) {
+    $('#cableMode').value = box.mode || 'auto';
+    const sel = $('#cablePort');
+    const inputs = inputsCache[d.id] || [];
+    const names = {};
+    inputs.forEach((i) => {
+      const m = /[?&]port=(\d+)/.exec(i.uri || '');
+      if (!m) return;
+      if (i.uri.startsWith('extInput:cec')) names[m[1]] = i.title;
+      else if (i.uri.startsWith('extInput:hdmi') && !names[m[1]]) names[m[1]] = '';
+    });
+    if (!Object.keys(names).length) [1, 2, 3, 4].forEach((n) => { names[n] = ''; });
+    if (box.port && !(box.port in names)) names[box.port] = '';
+    sel.innerHTML = '';
+    const none = new Option('Not set', '');
+    sel.add(none);
+    Object.keys(names).sort((a, b) => a - b).forEach((n) => {
+      sel.add(new Option(`HDMI ${n}${names[n] ? ` (${names[n]})` : ''}`, n));
+    });
+    sel.value = box.port ? String(box.port) : '';
+  }
+  renderCableChip();
+}
+
+async function cableSave(body) {
+  const d = currentDevice();
+  try {
+    const { device } = await api('PUT', `/api/devices/${d.id}/xfinity`, body);
+    replaceDevice(device);
+    renderCable();
+    refreshStatus();
+  } catch (err) {
+    if (!(err instanceof AuthError)) toast(err.message, true);
+  }
+}
+
+function stopCablePairing(msg) {
+  clearInterval(cablePairTimer);
+  cablePairTimer = null;
+  $('#cablePair').disabled = false;
+  if (msg) $('#cableWait').textContent = msg;
+}
+
+async function cablePair() {
+  const d = currentDevice();
+  if (!d) return;
+  stopCablePairing();
+  $('#cablePair').disabled = true;
+  try {
+    const { code, expires } = await api('POST', `/api/devices/${d.id}/xfinity/pair`);
+    $('#cableCode').hidden = false;
+    $('#cableCodeText').textContent = code;
+    $('#cableWait').textContent = 'Waiting for the TV…';
+    const deadline = expires && expires > Date.now() ? expires : Date.now() + 5 * 60 * 1000;
+    cablePairTimer = setInterval(async () => {
+      if (Date.now() > deadline) { stopCablePairing('The code expired. Pair again for a new one.'); return; }
+      try {
+        const r = await api('POST', `/api/devices/${d.id}/xfinity/pair/check`);
+        if (!r.paired) return;
+        stopCablePairing();
+        replaceDevice(r.device);
+        $('#cableCode').hidden = true;
+        toast('Xfinity box paired');
+        renderCable();
+        refreshStatus();
+      } catch (err) {
+        if (!(err instanceof AuthError)) stopCablePairing(`Pairing failed: ${err.message}`);
+      }
+    }, 4000);
+  } catch (err) {
+    $('#cablePair').disabled = false;
+    if (!(err instanceof AuthError)) toast(err.message, true);
+  }
+}
+
+async function cableUnpair() {
+  const d = currentDevice();
+  if (!d || !confirm(`Unpair the Xfinity box from ${d.name}?`)) return;
+  try {
+    const { device } = await api('DELETE', `/api/devices/${d.id}/xfinity`);
+    replaceDevice(device);
+    renderCable();
+    refreshStatus();
+  } catch (err) {
+    if (!(err instanceof AuthError)) toast(err.message, true);
+  }
+}
+
+function wireCable() {
+  $('#cablePair').addEventListener('click', cablePair);
+  $('#cableUnpair').addEventListener('click', cableUnpair);
+  $('#cableMode').addEventListener('change', (e) => cableSave({ mode: e.target.value }));
+  $('#cablePort').addEventListener('change', (e) => cableSave({ port: Number(e.target.value) || 0 }));
+  document.querySelectorAll('#cablePanel [data-vcode]').forEach((el) => {
+    onTap(el, () => run('xfinity_key', { vcode: el.dataset.vcode }));
+  });
+  $('#cableSay').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const text = $('#cableSayInput').value.trim();
+    if (!text) return;
+    run('xfinity_say', { text });
+    $('#cableSayInput').value = '';
   });
 }
