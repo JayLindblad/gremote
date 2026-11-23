@@ -282,6 +282,89 @@ async def screen_reader_off(host: str, everything: bool = False, port: int | Non
         await session.__aexit__()
 
 
+# -- on-screen messages ------------------------------------------------------------------------
+# Android TV has no shell command that puts text on screen (`cmd notification post` is Android
+# 10+, and TVs don't pop notifications up anyway). So gremote installs a tiny app of its own
+# (android/messenger) and starts it with the message. It draws over whatever is playing,
+# which needs the "display over other apps" app-op, granted here over ADB.
+MESSENGER_PKG = "com.gremote.messenger"
+MESSENGER_VERSION = 1          # = android:versionCode in android/messenger/AndroidManifest.xml
+MESSENGER_APK = Path(__file__).with_name("gremote-messenger.apk")
+MESSAGE_MAX = 500
+_REMOTE_APK = "/data/local/tmp/gremote-messenger.apk"
+
+
+async def _messenger_version(session) -> int | None:
+    dump = await session.shell(f"dumpsys package {MESSENGER_PKG} | grep versionCode")
+    m = re.search(r"versionCode=(\d+)", dump)
+    return int(m.group(1)) if m else None
+
+
+async def _ensure_messenger(session) -> bool:
+    """Install (or upgrade) the messenger app if needed; return True if it was installed now."""
+    installed = await _messenger_version(session)
+    if installed is None or installed < MESSENGER_VERSION:
+        if not MESSENGER_APK.exists():
+            raise DeviceError(f"{MESSENGER_APK.name} is missing from this gremote install")
+        try:
+            await session._dev.push(str(MESSENGER_APK), _REMOTE_APK, read_timeout_s=30.0,
+                                    transport_timeout_s=30.0)
+        except Exception as exc:
+            raise DeviceError(f"Could not copy the message app to the TV: {exc}") from exc
+        out = await session.shell(f"pm install -r {_REMOTE_APK}", timeout=60.0)
+        if "INSTALL_FAILED_UPDATE_INCOMPATIBLE" in out:   # older copy signed by another build
+            await session.shell(f"pm uninstall {MESSENGER_PKG}", timeout=30.0)
+            out = await session.shell(f"pm install {_REMOTE_APK}", timeout=60.0)
+        await session.shell(f"rm -f {_REMOTE_APK}")
+        if "Success" not in out:
+            raise DeviceError(f"The TV would not install the message app: {out[:300]}")
+    await session.shell(f"appops set {MESSENGER_PKG} SYSTEM_ALERT_WINDOW allow")
+    return installed is None or installed < MESSENGER_VERSION
+
+
+def _b64(text: str) -> str:
+    return base64.b64encode(text.encode("utf-8")).decode("ascii")
+
+
+async def show_message(host: str, text: str, title: str = "", mode: str = "banner",
+                       seconds: int = 10, port: int | None = None) -> dict:
+    """Show text on the TV: a banner over the video, or full screen until a key is pressed."""
+    text, title = text.strip(), title.strip()
+    if not text:
+        raise ValueError("Type a message first")
+    if len(text) > MESSAGE_MAX or len(title) > 100:
+        raise ValueError(f"Message too long (max {MESSAGE_MAX} characters)")
+    if mode not in ("banner", "full"):
+        raise ValueError("mode must be banner or full")
+    seconds = max(0, min(int(seconds), 600))
+    session = await connect_any(host, port)
+    try:
+        installed = await _ensure_messenger(session)
+        # Base64 is shell-safe, so no quoting worries whatever the message says.
+        extras = f"--es text {_b64(text)} --es mode {mode} --ei seconds {seconds}"
+        if title:
+            extras += f" --es title {_b64(title)}"
+        out = await session.shell(
+            f"am start-foreground-service -n {MESSENGER_PKG}/.MessageService {extras}")
+        if "error" in out.lower() or "exception" in out.lower():
+            raise DeviceError(f"The TV would not show the message: {out[:300]}")
+        return {"shown": True, "mode": mode, "seconds": seconds,
+                "installed_app": installed, "adb_port": session.port}
+    finally:
+        await session.__aexit__()
+
+
+async def clear_message(host: str, port: int | None = None) -> dict:
+    session = await connect_any(host, port)
+    try:
+        if await _messenger_version(session) is not None:
+            await session.shell(f"am start-foreground-service -n {MESSENGER_PKG}/.MessageService"
+                                " --ez clear true")
+        return {"cleared": True}
+    finally:
+        await session.__aexit__()
+
+
 async def list_activities(host: str, port: int | None = None) -> dict:
     """Activities of the TV's Settings packages, to find the right page to open."""
     session = await connect_any(host, port)

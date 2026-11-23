@@ -152,6 +152,7 @@ function renderRemote() {
   loadInputs();
   renderScreenReader();
   renderCable();
+  renderMessagePanel();
   checkScreenReader();
   autoLoadApps();
   if ($('#tvSettingsPanel').open || $('#allCommandsPanel').open) autoScanPages();
@@ -600,6 +601,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
   $('#a11yOff').addEventListener('click', screenReaderOff);
   wireCable();
+  wireMessage();
   $('#a11yCheck').addEventListener('click', () => checkScreenReader({ quiet: false }));
 
   try {
@@ -1462,6 +1464,54 @@ async function cableUnpair() {
   } catch (err) {
     if (!(err instanceof AuthError)) toast(err.message, true);
   }
+}
+
+// ------------------------------------------------------- message on TV --
+// Text shown on the TV's screen by gremote's small helper app (installed over ADB on first use).
+function renderMessagePanel() {
+  const d = currentDevice();
+  $('#messagePanel').hidden = !d || selected === ALL || d.type !== 'sony_bravia';
+}
+
+async function sendMessage(e) {
+  e.preventDefault();
+  const d = singleDevice();
+  const text = $('#messageText').value.trim();
+  if (!d) return;
+  if (!text) { toast('Type a message first', true); return; }
+  const mode = $('#messageMode').value;
+  let seconds = Number($('#messageSeconds').value);
+  if (mode === 'banner' && seconds === 0) seconds = 60;   // a banner can't take key presses
+  const btn = $('#messageSend');
+  btn.disabled = true;
+  toast('Sending to the TV…');
+  try {
+    const { result } = await api('POST', `/api/devices/${d.id}/action`, {
+      action: 'show_message',
+      params: { text, title: $('#messageTitle').value.trim(), mode, seconds },
+    });
+    toast(result.installed_app ? 'Installed the message app and showed it on the TV' : 'Showing on the TV');
+  } catch (err) {
+    if (!(err instanceof AuthError)) toast(err.message + ' (see Debug log)', true, 6000);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function clearMessage() {
+  const d = singleDevice();
+  if (!d) return;
+  try {
+    await api('POST', `/api/devices/${d.id}/action`, { action: 'clear_message' });
+    toast('Message taken down');
+  } catch (err) {
+    if (!(err instanceof AuthError)) toast(err.message, true, 6000);
+  }
+}
+
+function wireMessage() {
+  $('#messageForm').addEventListener('submit', sendMessage);
+  $('#messageClear').addEventListener('click', clearMessage);
 }
 
 function wireCable() {

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- gremote TV messenger: shows text sent from gremote over ADB on top of whatever is playing.
+     versionCode must go up whenever the Java source changes, so gremote reinstalls it. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.gremote.messenger"
+    android:versionCode="1"
+    android:versionName="1">
+
+    <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="28" />
+
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+
+    <uses-feature android:name="android.software.leanback" android:required="false" />
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+
+    <application android:label="gremote messages" android:allowBackup="false">
+        <!-- Started by gremote with `am start-foreground-service`; no launcher icon. -->
+        <service android:name=".MessageService" android:exported="true" />
+    </application>
+</manifest>

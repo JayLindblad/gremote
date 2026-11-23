@@ -379,6 +379,13 @@ class SonyBravia(DeviceDriver):
             return await adb.accessibility_status(self.host)
         if name == "screen_reader_off":
             return await adb.screen_reader_off(self.host, bool(params.get("all")))
+        if name == "show_message":
+            return await adb.show_message(self.host, str(params.get("text") or ""),
+                                          str(params.get("title") or ""),
+                                          str(params.get("mode") or "banner"),
+                                          int(params.get("seconds") or 0))
+        if name == "clear_message":
+            return await adb.clear_message(self.host)
         if name == "adb_activities":
             port = params.get("port")
             return await adb.list_activities(self.host, int(port) if port else None)

@@ -173,6 +173,33 @@
         </div>
       </details>
 
+      <details class="panel" id="messagePanel">
+        <summary>Message on TV</summary>
+        <p class="note">Put text on the TV's screen. A banner sits at the top while the show keeps playing; full screen covers everything until any remote button is pressed. Uses ADB (see TV settings); the first message installs a small gremote app on the TV.</p>
+        <form id="messageForm">
+          <input id="messageTitle" placeholder="Heading (optional)" aria-label="Message heading" maxlength="100" autocomplete="off">
+          <textarea id="messageText" rows="3" placeholder="Message" aria-label="Message" maxlength="500"></textarea>
+          <div class="set-row"><label for="messageMode">Show as</label>
+            <select id="messageMode">
+              <option value="banner">Banner over the video</option>
+              <option value="full">Full screen</option>
+            </select></div>
+          <div class="set-row"><label for="messageSeconds">Stays up for</label>
+            <select id="messageSeconds">
+              <option value="5">5 seconds</option>
+              <option value="10" selected>10 seconds</option>
+              <option value="30">30 seconds</option>
+              <option value="60">1 minute</option>
+              <option value="300">5 minutes</option>
+              <option value="0">Until a button is pressed (full screen)</option>
+            </select></div>
+          <div class="panel-actions">
+            <button class="btn small" type="submit" id="messageSend">Show on TV</button>
+            <button class="link" type="button" id="messageClear">Take it down</button>
+          </div>
+        </form>
+      </details>
+
       <details class="panel" id="appsPanel" open>
         <summary>Apps</summary>
         <div class="apps" id="apps"></div>
